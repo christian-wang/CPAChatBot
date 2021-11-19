@@ -19,7 +19,7 @@ decoder_outputs, state_h, state_c = decoder_lstm(decoder_embed, initial_state=de
 
 decoder_states = [state_h,state_c]
 
-decoder_model = Model([decoder_inp]+ decoder_states_inputs, [decoder_outputs] + decoder_states)
+decoder_model = Model([decoder_input]+ decoder_states_inputs, [decoder_outputs] + decoder_states)
 
 
 

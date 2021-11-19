@@ -18,7 +18,7 @@ encoder_states =[h,c]
 decoder_embed = embedding(decoder_input)
 decoder_lstm = LSTM(400,return_sequences=True, return_state=True)
 
-decoder_op, _, _ = encoder_lstm(encoder_embed)
+decoder_op, _, _ = decoder_lstm(encoder_embed,initial_state=encoder_states)
 
 dense = Dense(VOCAB_SIZE, activation='softmax')
 
