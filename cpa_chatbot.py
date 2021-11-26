@@ -38,9 +38,15 @@ class CPAChatBot:
         conversations = load_conversations(conversations_file)
         lines = load_dialogues(lines_file)
         question_answers = get_question_answers(conversations, lines)
+
+        del conversations, lines
+
         word2count = get_word_counts(question_answers)
         self.vocab, self.inv_vocab = create_vocab(word2count, self.min_word_count)
         self.encoder_inp, self.decoder_inp = create_inputs(question_answers, self.vocab)
+
+        del question_answers
+
         self.decoder_final_output = get_decoder_final_output(self.decoder_inp, self.vocab)
 
     def train(self, epochs):
