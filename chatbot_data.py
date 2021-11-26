@@ -1,45 +1,39 @@
-# open and load in the data sets of movie lines and movie conversations
-lines = open('corpus/movie_lines.txt', encoding='utf-8', errors= 'ignore').read().split('\n')
-
-conversations = open('corpus/movie_conversations.txt', encoding='utf-8', errors= 'ignore').read().split('\n')
-
-exchange = []
-for conversation in conversations:
-    #should the slice not start at 0???
-    exchange.append(conversation.split(' +++$+++ ')[-1][1:-1].replace("'","").replace(",","").split())
-
-
-dialogue ={}
-for line in lines:
-    dialogue[line.split(' +++$+++ ')[0]] = line.split(' +++$+++ ')[-1]
-
-questions =[]
-answers = []
-
-for conversation in exchange:
-    for i in range(len(conversation)-1):
-        questions.append(dialogue[conversation[i]])
-        answers.append(dialogue[conversation[i+1]])
-
-
-#delete variables we don't need anymore to save memory for training
-del(lines, conversations, exchange, dialogue, line, conversation, i)
-
-
-#making fixed length of questions less than 13, idk why lol
-
-fixedLengthQ =[]
-fixedLengthA = []
-for i in range(len(questions)):
-    if len(questions[i]) < 13:
-        fixedLengthQ.append(questions[i])
-        fixedLengthA.append(questions[i])
-
-#cleaning text, change uppercase to lowercase, remove punctuation.
-# Uses regular expressions to do so
 import re
-from sre_constants import CATEGORY_LINEBREAK
+from keras.preprocessing.sequence import pad_sequences
+from tensorflow.keras.utils import to_categorical
+
+TAGS = {'<PAD>', '<EOS>', '<OUT>', '<SOS>'}
+
+
+def load_conversations(file_name):
+    conversations = []
+    try:
+        with open(file_name, encoding='utf-8', errors='ignore') as f:
+            for line in f:
+                line_ids = line.strip().split(' +++$+++ ')[-1][1:-1].replace("'", "").split(", ")
+                conversations.append(line_ids)
+    except FileNotFoundError:
+        print(f"Conversations file not found at \"{file_name}\"")
+        exit(1)
+    return conversations
+
+
+def load_dialogues(file_name):
+    dialogues = dict()
+    try:
+        with open(file_name, encoding='utf-8', errors='ignore') as f:
+            for line in f:
+                line_id, character_id, movie_id, character_name, text = line.rstrip('\n').split(' +++$+++ ')
+                dialogues[line_id] = text
+    except FileNotFoundError:
+        print(f"Lines file not found at \"{file_name}\"")
+        exit(1)
+    return dialogues
+
+
 def clean_text(txt):
+    # cleaning text, change uppercase to lowercase, remove punctuation.
+    # Uses regular expressions to do so
     txt = txt.lower()
     txt = re.sub(r"i'm", "i am", txt)
     txt = re.sub(r"he's", "he is", txt)
@@ -56,125 +50,122 @@ def clean_text(txt):
     txt = re.sub(r"[^\w\s]", "", txt)
     return txt
 
-clean_questions =[]
-clean_answers = []
 
-#apply cleaning to questions and answers
-for line in fixedLengthQ:
-    clean_questions.append(clean_text(line))
+def get_question_answers(conversations, lines, max_question_len=13, max_conversations=30000):
+    questions_answers = []
+    for conversation in conversations:
+        for i in range(len(conversation) - 1):
 
-for line in fixedLengthA:
-    clean_answers.append(clean_text(line))
+            question = clean_text(lines[conversation[i]])
+            # skip any questions that are too long
+            if len(question.split()) >= max_question_len:
+                continue
 
-#make fixed length for answers as well now
-for i in range(len(clean_answers)):
-    clean_answers[i] = ' '.join(clean_answers[i].split()[:11])
+            # truncate answer to be first 11 words
+            answer = ' '.join(clean_text(lines[conversation[i + 1]]).split()[:11])
 
-del(answers, i , line, questions , fixedLengthA, fixedLengthQ)
+            # add SOS and EOS tags to answer
+            answer = '<SOS> ' + answer + ' <EOS>'
+            # trunc_answer = ' '.join(answer.split()[:11])
+            questions_answers.append([question, answer])
 
-clean_answers = clean_answers[:30000]
-clean_questions = clean_questions[:30000]
-
-#creating dictionary of word counts 
-# can optimize this. TODO optimize this
-word2count = {}
-for line in clean_questions:
-    for word in line.split():
-        if word not in word2count:
-            word2count[word] = 1
-        else:
-            word2count[word]+=1
-
-for line in clean_answers:
-    for word in line.split():
-        if word not in word2count:
-            word2count[word] = 1
-        else:
-            word2count[word]+=1
-
-del(word, line)
-
-#removing words that have low count to help improve training time, create vocab
-threshold = 5
-vocab ={}
-word_number = 0
-
-for word, count in word2count.items():
-    if count >= threshold:
-        vocab[word] = word_number
-        word_number += 1
-
-del(word2count, word, count, threshold, word_number)
-
-#append start of sentence and end of sentence tags to answers
-for i in range(len(clean_answers)):
-    clean_answers[i] = '<SOS> ' + clean_answers[i] + ' <EOS>' 
-
-# add token to vocab and give it a unique id
-tokens =['<PAD>', '<EOS>', '<OUT>', '<SOS>']
-x= len(vocab)
-for token in tokens:
-    vocab[token] = x
-    x +=1
-#padding is usually signified by 0 in decoder
-# cameron is the word that holds the 0 id
-# so we swap them
-# TODO: optimize this part
-vocab['cameron'] = vocab['<PAD>']
-vocab['<PAD>'] = 0
-
-del(tokens, x)
-
-#inverse the dictionary
-inv_vocab ={w:v for v, w in vocab.items()}
+    # use first max_conversations questions and answers
+    return questions_answers[:max_conversations]
 
 
+# creating dictionary of word counts
+def get_word_counts(question_answers):
 
-#making inputs for encoder
-#doesnt handle unknow words good TODO: figure out how to handle unkown words
-encoder_inp = []
-for line in clean_questions:
-    lst = []
-    for word in line.split():
-        if word not in vocab:
-            lst.append(vocab['<OUT>'])
-        else:
-            lst.append(vocab[word])
-
-
-    encoder_inp.append(lst)
-
-
-#making inputs for decoder
-#doesnt handle unknow words good TODO: figure out how to handle unkown words
-decoder_inp = []
-for line in clean_answers:
-    lst = []
-    for word in line.split():
-        if word not in vocab:
-            lst.append(vocab['<OUT>'])
-        else:
-            lst.append(vocab[word])
+    word_counts = {}
+    for question, answer in question_answers:
+        for word in question.split():
+            if word in TAGS:
+                continue
+            elif word not in word_counts:
+                word_counts[word] = 1
+            else:
+                word_counts[word] += 1
+        for word in answer.split():
+            if word in TAGS:
+                continue
+            if word not in word_counts:
+                word_counts[word] = 1
+            else:
+                word_counts[word] += 1
+    return word_counts
 
 
-    decoder_inp.append(lst)
+def create_vocab(word2count, threshold):
 
-del(clean_answers, clean_questions, line, lst, word)
+    # removing words that have low count to help improve training time, create vocab
+    vocab = dict()
+    word_number = 0
+
+    for word, count in word2count.items():
+        if count >= threshold:
+            vocab[word] = word_number
+            word_number += 1
+
+    # add tags to vocabulary
+    token_id = len(vocab)
+    for token in TAGS:
+        vocab[token] = token_id
+        token_id += 1
+
+    # invert the vocabulary
+    inv_vocab = {w: v for v, w in vocab.items()}
+
+    # ensure vocab['<PAD>'] = 0
+    old_pad = vocab['<PAD>']
+    old_zero = inv_vocab[0]
+    vocab['<PAD>'] = 0
+    vocab[old_zero] = old_pad
+    inv_vocab[old_pad] = old_zero
+    inv_vocab[0] = '<PAD>'
+
+    return vocab, inv_vocab
 
 
-#paddding inputs
-from keras.preprocessing.sequence import pad_sequences
-encoder_inp = pad_sequences(encoder_inp, 13, padding='post', truncating='post')
-decoder_inp = pad_sequences(decoder_inp, 13, padding='post', truncating='post')
+def create_inputs(question_answers, vocab):
 
-#getting context of inputj
-decoder_final_output =[]
-for i in decoder_inp:
-    decoder_final_output.append(i[1:])
+    # making inputs for encoder
+    # doesnt handle unknown words good. figure out how to handle unknown words
+    encoder_inp = []
+    decoder_inp = []
 
-decoder_final_output = pad_sequences(decoder_final_output, 13, padding='post', truncating='post')
+    for question, answer in question_answers:
+        q_list = []
+        a_list = []
+
+        for word in question.split():
+            if word not in vocab:
+                q_list.append(vocab['<OUT>'])
+            else:
+                q_list.append(vocab[word])
+        encoder_inp.append(q_list)
+
+        for word in answer.split():
+            if word not in vocab:
+                a_list.append(vocab['<OUT>'])
+            else:
+                a_list.append(vocab[word])
+
+        decoder_inp.append(a_list)
+
+    encoder_inp = pad_sequences(encoder_inp, 13, padding='post', truncating='post')
+    decoder_inp = pad_sequences(decoder_inp, 13, padding='post', truncating='post')
+    return encoder_inp, decoder_inp
 
 
-from tensorflow.keras.utils import to_categorical
-#converts data from 2d to 3d
-decoder_final_output = to_categorical(decoder_final_output, len(vocab))
+def get_decoder_final_output(decoder_inp, vocab):
+
+    # getting context of input
+    decoder_final_output = []
+    for i in decoder_inp:
+        decoder_final_output.append(i[1:])
+
+    decoder_final_output = pad_sequences(decoder_final_output, 13, padding='post', truncating='post')
+
+    # converts data from 2d to 3d
+    decoder_final_output = to_categorical(decoder_final_output, len(vocab))
+    return decoder_final_output
