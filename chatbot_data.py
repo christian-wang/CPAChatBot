@@ -1,11 +1,18 @@
 import re
+from typing import List, Dict
 from keras.preprocessing.sequence import pad_sequences
 from tensorflow.keras.utils import to_categorical
 
 TAGS = {'<PAD>', '<EOS>', '<OUT>', '<SOS>'}
 
 
-def load_conversations(file_name):
+def load_conversations(file_name: str) -> List[List[str]]:
+    """
+    Return list of conversations from file_name
+
+    :param file_name: path to file
+    :return: List of lists containing line ids
+    """
     conversations = []
     try:
         with open(file_name, encoding='utf-8', errors='ignore') as f:
@@ -18,7 +25,7 @@ def load_conversations(file_name):
     return conversations
 
 
-def load_dialogues(file_name):
+def load_dialogues(file_name: str) -> Dict[str, str]:
     dialogues = dict()
     try:
         with open(file_name, encoding='utf-8', errors='ignore') as f:

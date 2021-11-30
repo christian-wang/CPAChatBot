@@ -1,14 +1,13 @@
+import argparse
 import torch
 import torch.nn as nn
 import torch.optim as optim
-import re
-from typing import Dict, List, Union
 from tqdm import tqdm
-from torchtext.legacy.data import Dataset, Example, Field, BucketIterator
-
+import re
+from torchtext.legacy.data import Field, Example, Dataset, BucketIterator
+from typing import Dict, List, Tuple, Union
 import spacy
 import numpy as np
-
 import random
 import math
 import time
@@ -16,22 +15,46 @@ import time
 import model
 
 SEED = 1234
-MAX_EXAMPLES=50000
-BATCH_SIZE = 64
-ENC_EMB_DIM = 256
-DEC_EMB_DIM = 256
-HID_DIM = 512
-ENC_DROPOUT = 0.5
-DEC_DROPOUT = 0.5
-N_EPOCHS = 10
-CLIP = 1
+random.seed(SEED)
+np.random.seed(SEED)
+torch.manual_seed(SEED)
+torch.cuda.manual_seed(SEED)
+torch.backends.cudnn.deterministic = True
+
+spacy_en = spacy.load('en_core_web_sm')
 
 
-def tokenize_en(text):
+class HyperParams:
+    encoder_emb_dim = 256
+    decoder_emb_dim = 256
+    hidden_dim = 512
+    enc_dropout = 0.5
+    dec_dropout = 0.5
+    batch_size = 1
+    clip = 1
+
+
+def tokenize(text):
     """
     Tokenizes English text from a string into a list of strings
     """
-    return [tok.text for tok in spacy_en.tokenizer(text)]
+    return [tok.text.strip() for tok in spacy_en.tokenizer(text) if tok.text.strip()]
+
+
+QFIELD = Field(tokenize=tokenize,
+               init_token='<sos>',
+               eos_token='<eos>',
+               lower=True)
+
+AFIELD = Field(tokenize=tokenize,
+               init_token='<sos>',
+               eos_token='<eos>',
+               lower=True)
+
+
+def init_weights(m):
+    for name, param in m.named_parameters():
+        nn.init.normal_(param.data, mean=0, std=0.01)
 
 
 def clean_text(txt):
@@ -50,7 +73,6 @@ def clean_text(txt):
     txt = txt.replace("'d", " would")
     txt = txt.replace("won't", "will not")
     txt = txt.replace("can't", "cannot")
-    txt = txt.replace("haven't", "have not")
     txt = re.sub(r"[^\w\s]", "", txt)
     return txt
 
@@ -93,49 +115,13 @@ def load_dialogues(file_name: str) -> Dict[str, str]:
     return dialogues
 
 
-def create_datasets(conversations_file, lines_file, src_field, trg_field, split_ratios: Union[List, float] = 0.8,
-                    max_examples=MAX_EXAMPLES):
-    exchanges = load_exchanges(conversations_file)
-    lines = load_dialogues(lines_file)
-    examples = []
-
-    fields = [('src', src_field), ('trg', trg_field)]
-
-    for question_id, answer_id in exchanges:
-        question = lines[question_id]
-        # question = ' '.join([word.strip() for word in lines[question_id].split() if word.strip()][:20])
-        answer = lines[answer_id]
-        # answer = ' '.join([word.strip() for word in lines[answer_id].split() if word.strip()][:20])
-
-        # if len(question) > 13:
-        #     continue
-        # answer = ' '.join(answer.split()[:11])
-        # creates an example instance from the question ID and answer ID
-        examples.append(Example.fromlist(
-            [question, answer],
-            fields))
-        if len(examples) >= max_examples:
-            break
-    print("Sampling {} examples from dataset of size {}".format(len(examples), len(exchanges)))
-    dataset = Dataset(examples, fields)
-
-    split_datasets = dataset.split(split_ratios)
-
-    # split dataset into training, validation, and testing
-    # lengths = [int(len(dataset) * ratios[0]), len(dataset) - int(len(dataset) * ratios[0])]
-
-    # train_data, test_data = random_split(dataset, lengths,
-    #                                      generator=torch.Generator().manual_seed(SEED))
-    return split_datasets
-
-
 class Encoder(nn.Module):
     def __init__(self, input_dim, emb_dim, hid_dim, dropout):
         super().__init__()
 
         self.hid_dim = hid_dim
 
-        self.embedding = nn.Embedding(input_dim, emb_dim)  # no dropout as only one layer!
+        self.embedding = nn.Embedding(input_dim, emb_dim)
 
         self.rnn = nn.GRU(emb_dim, hid_dim)
 
@@ -215,6 +201,21 @@ class Decoder(nn.Module):
         return prediction, hidden
 
 
+def decoder_out_to_text(decoder_out):
+    words = []
+    for word_id in decoder_out.topk(1)[1][:, 0].data:
+        word = AFIELD.vocab.itos[word_id]
+        if word == AFIELD.eos_token:
+            break
+        words.append(word)
+    return " ".join(words)
+
+
+def text_to_encoder_input(text):
+    tokens = [QFIELD.init_token] + tokenize(clean_text(text)) + [QFIELD.eos_token]
+    return torch.tensor([QFIELD.vocab.stoi[t] for t in tokens])
+
+
 class Seq2Seq(nn.Module):
     def __init__(self, encoder, decoder, device):
         super().__init__()
@@ -268,91 +269,73 @@ class Seq2Seq(nn.Module):
 
         return outputs
 
-
-random.seed(SEED)
-np.random.seed(SEED)
-torch.manual_seed(SEED)
-torch.cuda.manual_seed(SEED)
-torch.backends.cudnn.deterministic = True
-
-spacy_en = spacy.load('en_core_web_sm')
-
-device_type = 'cuda' if torch.cuda.is_available() else 'cpu'
-device = torch.device(device_type)
-device_count = torch.cuda.device_count()
-devices = [torch.cuda.get_device_name(i) for i in range(device_count)]
-
-print("device type: {}, devices ({}): {}".format(device, device_count, devices))
+    def get_response(self, user_input):
+        src = text_to_encoder_input(user_input).unsqueeze(1)
+        trg = torch.zeros(13, 1, dtype=torch.long).to(self.device)
+        trg[0][0] = AFIELD.vocab.stoi[AFIELD.init_token]
+        output = self(src, trg, 0)
+        output_text = decoder_out_to_text(output)
+        return output_text
 
 
-# prepare data
+def create_datasets(conversations_file, lines_file, split_ratios: Union[List, float] = 0.8):
+    exchanges = load_exchanges(conversations_file)
+    lines = load_dialogues(lines_file)
+    examples = []
 
-SRC = Field(tokenize=tokenize_en,
-            init_token='<sos>',
-            eos_token='<eos>',
-            lower=True)
+    fields = [('src', QFIELD), ('trg', AFIELD)]
 
-TRG = Field(tokenize=tokenize_en,
-            init_token='<sos>',
-            eos_token='<eos>',
-            lower=True)
+    for question_id, answer_id in exchanges:
+        question = lines[question_id]
+        answer = lines[answer_id]
+        if len(question) > 13:
+            continue
+        answer = ' '.join(answer.split()[:11])
+        # creates an example instance from the question ID and answer ID
+        examples.append(Example.fromlist(
+            [question, answer],
+            fields))
 
+    dataset = Dataset(examples, fields)
 
-train_data, valid_data, test_data = create_datasets('corpus/movie_conversations.txt', 'corpus/movie_lines.txt', SRC, TRG, [0.8, 0.1, 0.1])
+    split_datasets = dataset.split(split_ratios)
 
-print(vars(train_data.examples[0]))
+    # split dataset into training, validation, and testing
+    # lengths = [int(len(dataset) * ratios[0]), len(dataset) - int(len(dataset) * ratios[0])]
 
-SRC.build_vocab(train_data, min_freq=2)
-TRG.build_vocab(train_data, min_freq=2)
-
-
-train_iterator, valid_iterator, test_iterator = BucketIterator.splits(
-    (train_data, valid_data, test_data),
-    batch_size=BATCH_SIZE,
-    sort_key=lambda x: len(x.src),
-    sort_within_batch=False,
-    device=device)
-
-
-INPUT_DIM = len(SRC.vocab)
-OUTPUT_DIM = len(TRG.vocab)
+    # train_data, test_data = random_split(dataset, lengths,
+    #                                      generator=torch.Generator().manual_seed(SEED))
+    return split_datasets
 
 
-enc = Encoder(INPUT_DIM, ENC_EMB_DIM, HID_DIM, ENC_DROPOUT)
-dec = Decoder(OUTPUT_DIM, DEC_EMB_DIM, HID_DIM, DEC_DROPOUT)
+def parse_args():
+    parser = argparse.ArgumentParser()
 
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    model_group = parser.add_mutually_exclusive_group()
+    model_group.add_argument('--save', type=str, default=None, help='Model save path')
+    model_group.add_argument('--load', type=str, default=None, help='Model load path')
 
-model = Seq2Seq(enc, dec, device).to(device)
+    parser.add_argument('--conversations_file', type=str, default='corpus/movie_conversations.txt',
+                        help='Path to movie_conversations.txt')
+    parser.add_argument('--lines_file', type=str, default='corpus/movie_lines.txt', help='Path to movie_lines.txt')
+    parser.add_argument('--max-question-length', type=int, default=13, help='Maximum number of words in question')
+    parser.add_argument('--max-conversations', type=int, default=30000,
+                        help='Maximum number of conversations to train on')
+    parser.add_argument('--min-word-count', type=int, default=2,
+                        help='Minimum number of times a word can appear to be included in vocabulary')
+    parser.add_argument('--epochs', type=int, default=4, help='Number of epochs to train for')
 
-
-def init_weights(m):
-    for name, param in m.named_parameters():
-        nn.init.normal_(param.data, mean=0, std=0.01)
-
-
-model.apply(init_weights)
-
-
-def count_parameters(model):
-    return sum(p.numel() for p in model.parameters() if p.requires_grad)
-
-
-print(f'The model has {count_parameters(model):,} trainable parameters')
-
-optimizer = optim.Adam(model.parameters())
-
-TRG_PAD_IDX = TRG.vocab.stoi[TRG.pad_token]
-
-criterion = nn.CrossEntropyLoss(ignore_index=TRG_PAD_IDX)
+    args = parser.parse_args()
+    return args
 
 
-def train(model, iterator, optimizer, criterion, clip):
+def train_epoch(model, iterator, optimizer, criterion, clip):
     model.train()
 
     epoch_loss = 0
 
     for i, batch in tqdm(enumerate(iterator), total=len(iterator)):
+
         src = batch.src
         trg = batch.trg
 
@@ -378,6 +361,7 @@ def train(model, iterator, optimizer, criterion, clip):
         torch.nn.utils.clip_grad_norm_(model.parameters(), clip)
 
         optimizer.step()
+
         epoch_loss += loss.item()
 
     return epoch_loss / len(iterator)
@@ -389,7 +373,7 @@ def evaluate(model, iterator, criterion):
     epoch_loss = 0
 
     with torch.no_grad():
-        for i, batch in tqdm(enumerate(iterator), total=len(iterator)):
+        for i, batch in enumerate(iterator):
             src = batch.src
             trg = batch.trg
 
@@ -413,37 +397,94 @@ def evaluate(model, iterator, criterion):
     return epoch_loss / len(iterator)
 
 
+def test(model):
+    model.eval()
+
+    with torch.no_grad():
+        # while True:
+        #     user_input = input("You: ")
+        #     print("CPA:", model.get_response(user_input))
+        model.get_response("hello my name is bob")
+
+
 def epoch_time(start_time, end_time):
     elapsed_time = end_time - start_time
     elapsed_mins = int(elapsed_time / 60)
     elapsed_secs = int(elapsed_time - (elapsed_mins * 60))
     return elapsed_mins, elapsed_secs
 
-"""
-best_valid_loss = float('inf')
 
-for epoch in range(N_EPOCHS):
+def train_model(model, train_iterator, optimizer, criterion, epochs):
 
-    start_time = time.time()
+    for epoch in range(epochs):
 
-    train_loss = train(model, train_iterator, optimizer, criterion, CLIP)
-    valid_loss = evaluate(model, valid_iterator, criterion)
+        start_time = time.time()
 
-    end_time = time.time()
+        train_loss = train_epoch(model, train_iterator, optimizer, criterion, HyperParams.clip)
 
-    epoch_mins, epoch_secs = epoch_time(start_time, end_time)
+        end_time = time.time()
 
-    if valid_loss < best_valid_loss:
-        best_valid_loss = valid_loss
-        torch.save(model.state_dict(), 'tut2-model.pt')
+        epoch_mins, epoch_secs = epoch_time(start_time, end_time)
+        print(f'Epoch: {epoch + 1:02} | Time: {epoch_mins}m {epoch_secs}s')
+        print(f'\tTrain Loss: {train_loss:.3f} | Train PPL: {math.exp(train_loss):7.3f}')
 
-    print(f'Epoch: {epoch + 1:02} | Time: {epoch_mins}m {epoch_secs}s')
-    print(f'\tTrain Loss: {train_loss:.3f} | Train PPL: {math.exp(train_loss):7.3f}')
-    print(f'\t Val. Loss: {valid_loss:.3f} |  Val. PPL: {math.exp(valid_loss):7.3f}')
-"""
 
-model.load_state_dict(torch.load('../models/model_50k.pt', map_location=torch.device(device_type)))
+def main():
+    args = parse_args()
+    min_word_count = args.min_word_count
+    epochs = args.epochs
+    # create new CPA model and train it
+    conversations_file = args.conversations_file
+    lines_file = args.lines_file
 
-test_loss = evaluate(model, test_iterator, criterion)
+    # max_question_length = args.max_question_length
+    # max_conversations = args.max_conversations
 
-print(f'| Test Loss: {test_loss:.3f} | Test PPL: {math.exp(test_loss):7.3f} |')
+    print("Preparing data...")
+    train_data, test_data = create_datasets(conversations_file, lines_file, 0.8)
+    QFIELD.build_vocab(train_data, min_freq=min_word_count)
+    AFIELD.build_vocab(train_data, min_freq=min_word_count)
+
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+
+
+    train_iterator, test_iterator = BucketIterator.splits(
+        (train_data, test_data),
+        batch_size=HyperParams.batch_size,
+        device=device)
+
+    input_dim = len(QFIELD.vocab)
+    output_dim = len(AFIELD.vocab)
+
+    enc = Encoder(input_dim, HyperParams.encoder_emb_dim, HyperParams.hidden_dim, HyperParams.enc_dropout)
+    dec = Decoder(output_dim, HyperParams.decoder_emb_dim, HyperParams.hidden_dim, HyperParams.dec_dropout)
+
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+    model = Seq2Seq(enc, dec, device).to(device)
+    model.apply(init_weights)
+
+    parameters = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    print(f'The model has {parameters:,} trainable parameters')
+
+    if args.load:
+        # read CPA model from file instead of training from scatch
+        print(f'Loading CPA model from {args.load}')
+        model.load_state_dict(torch.load(args.load))
+    else:
+        print("Training...")
+        optimizer = optim.Adam(model.parameters())
+        criterion = nn.CrossEntropyLoss(ignore_index=AFIELD.vocab.stoi[AFIELD.pad_token])
+        train_model(model, train_iterator, optimizer, criterion, epochs)
+        if args.save:
+            print(f'Saving model to {args.save}')
+            torch.save(model.state_dict(), args.save)
+
+    print("Starting ChatBot")
+    # evaluate(model, test_iterator, criterion)
+    test(model)
+
+
+if __name__ == '__main__':
+    main()
