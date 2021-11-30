@@ -7,9 +7,8 @@ import codecs
 from torch import optim
 
 from data_prep4 import get_question_answers, trimRareWords, batch2TrainData, load_dialogues, load_exchanges
-from hyperparams import clip, learning_rate, decoder_learning_ratio, n_iteration, save_every, \
-    model_name, attn_model, hidden_size, encoder_n_layers, decoder_n_layers, dropout, batch_size, small_batch_size
-from model import EncoderRNN, LuongAttnDecoderRNN, trainIters, GreedySearchDecoder, evaluateInput
+from hyperparams import learning_rate, decoder_learning_ratio, save_every, attn_model, hidden_size, encoder_n_layers, decoder_n_layers, dropout, small_batch_size
+from model import EncoderRNN, LuongAttnDecoderRNN, CPAChatBot
 
 USE_CUDA = torch.cuda.is_available()
 device = torch.device("cuda" if USE_CUDA else "cpu")
@@ -92,13 +91,12 @@ for state in decoder_optimizer.state.values():
             state[k] = v.cuda()
 
 print("Starting Training!")
-trainIters(model_name, vocab, pairs, encoder, decoder, encoder_optimizer, decoder_optimizer,
-           embedding, encoder_n_layers, decoder_n_layers, save_dir, n_iteration, batch_size,
-           save_every, clip, loadFilename, device, checkpoint)
+
+cpa = CPAChatBot(encoder, decoder, encoder_optimizer, decoder_optimizer,
+                 embedding, vocab, question_answers, device)
+cpa.trainIters(save_dir, save_every, loadFilename, checkpoint)
 
 encoder.eval()
 decoder.eval()
 
-searcher = GreedySearchDecoder(encoder, decoder, device, vocab)
-
-# evaluateInput(encoder, decoder, searcher, vocab, device)
+# cpa.run()

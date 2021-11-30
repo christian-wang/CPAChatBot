@@ -1,13 +1,15 @@
 import os
 import random
+from typing import List
 
 import torch
-from torch import nn as nn
+from torch import nn as nn, optim
 from torch.nn import functional as F
 from tqdm import tqdm
 from torchtext.legacy.vocab import Vocab
 from data_prep4 import batch2TrainData, indexesFromSentence, normalizeString
-from hyperparams import MAX_LENGTH, teacher_forcing_ratio, hidden_size, SOS, EOS, PAD
+from hyperparams import MAX_LENGTH, teacher_forcing_ratio, hidden_size, SOS, EOS, PAD, n_iteration, batch_size, clip, \
+    encoder_n_layers, decoder_n_layers
 
 
 class EncoderRNN(nn.Module):
@@ -121,131 +123,6 @@ class LuongAttnDecoderRNN(nn.Module):
         return output, hidden
 
 
-def maskNLLLoss(inp, target, mask, device):
-    nTotal = mask.sum()
-    crossEntropy = -torch.log(torch.gather(inp, 1, target.view(-1, 1)).squeeze(1))
-    loss = crossEntropy.masked_select(mask).mean()
-    loss = loss.to(device)
-    return loss, nTotal.item()
-
-
-def train(input_variable, lengths, target_variable, mask, max_target_len, encoder, decoder,
-          encoder_optimizer, decoder_optimizer, batch_size, clip, device, sos_idx):
-    # Zero gradients
-    encoder_optimizer.zero_grad()
-    decoder_optimizer.zero_grad()
-
-    # Set device options
-    input_variable = input_variable.to(device)
-    target_variable = target_variable.to(device)
-    mask = mask.to(device)
-    # Lengths for rnn packing should always be on the cpu
-    lengths = lengths.to("cpu")
-
-    # Initialize variables
-    loss = 0
-    print_losses = []
-    n_totals = 0
-
-    # Forward pass through encoder
-    encoder_outputs, encoder_hidden = encoder(input_variable, lengths)
-
-    # Create initial decoder input (start with SOS tokens for each sentence)
-    decoder_input = torch.LongTensor([[sos_idx for _ in range(batch_size)]])
-    decoder_input = decoder_input.to(device)
-
-    # Set initial decoder hidden state to the encoder's final hidden state
-    decoder_hidden = encoder_hidden[:decoder.n_layers]
-
-    # Determine if we are using teacher forcing this iteration
-    use_teacher_forcing = True if random.random() < teacher_forcing_ratio else False
-
-    # Forward batch of sequences through decoder one time step at a time
-    if use_teacher_forcing:
-        for t in range(max_target_len):
-            decoder_output, decoder_hidden = decoder(
-                decoder_input, decoder_hidden, encoder_outputs
-            )
-            # Teacher forcing: next input is current target
-            decoder_input = target_variable[t].view(1, -1)
-            # Calculate and accumulate loss
-            mask_loss, nTotal = maskNLLLoss(decoder_output, target_variable[t], mask[t], device)
-            loss += mask_loss
-            print_losses.append(mask_loss.item() * nTotal)
-            n_totals += nTotal
-    else:
-        for t in range(max_target_len):
-            decoder_output, decoder_hidden = decoder(
-                decoder_input, decoder_hidden, encoder_outputs
-            )
-            # No teacher forcing: next input is decoder's own current output
-            _, topi = decoder_output.topk(1)
-            decoder_input = torch.LongTensor([[topi[i][0] for i in range(batch_size)]])
-            decoder_input = decoder_input.to(device)
-            # Calculate and accumulate loss
-            mask_loss, nTotal = maskNLLLoss(decoder_output, target_variable[t], mask[t], device)
-            loss += mask_loss
-            print_losses.append(mask_loss.item() * nTotal)
-            n_totals += nTotal
-
-    # Perform backpropatation
-    loss.backward()
-
-    # Clip gradients: gradients are modified in place
-    _ = nn.utils.clip_grad_norm_(encoder.parameters(), clip)
-    _ = nn.utils.clip_grad_norm_(decoder.parameters(), clip)
-
-    # Adjust model weights
-    encoder_optimizer.step()
-    decoder_optimizer.step()
-
-    return sum(print_losses) / n_totals
-
-
-def trainIters(model_name, vocab, pairs, encoder, decoder, encoder_optimizer, decoder_optimizer, embedding,
-               encoder_n_layers, decoder_n_layers, save_dir, n_iteration, batch_size, save_every, clip,
-               loadFilename, device, checkpoint):
-    # Load batches for each iteration
-    training_batches = [batch2TrainData(vocab, [random.choice(pairs) for _ in range(batch_size)])
-                        for _ in range(n_iteration)]
-
-    # Initializations
-    print('Initializing ...')
-    start_iteration = 1
-    print_loss = 0
-    if loadFilename:
-        start_iteration = checkpoint['iteration'] + 1
-
-    # Training loop
-    print("Training...")
-    for iteration in tqdm(range(start_iteration, n_iteration + 1), total=n_iteration + 1 - start_iteration):
-        training_batch = training_batches[iteration - 1]
-        # Extract fields from batch
-        input_variable, lengths, target_variable, mask, max_target_len = training_batch
-
-        # Run a training iteration with batch
-        loss = train(input_variable, lengths, target_variable, mask, max_target_len, encoder,
-                     decoder, encoder_optimizer, decoder_optimizer, batch_size, clip, device, vocab[SOS])
-        print_loss += loss
-
-        # Save checkpoint
-        if (iteration % save_every == 0):
-            directory = os.path.join(save_dir, model_name,
-                                     '{}-{}_{}'.format(encoder_n_layers, decoder_n_layers, hidden_size))
-            if not os.path.exists(directory):
-                os.makedirs(directory)
-            torch.save({
-                'iteration': iteration,
-                'en': encoder.state_dict(),
-                'de': decoder.state_dict(),
-                'en_opt': encoder_optimizer.state_dict(),
-                'de_opt': decoder_optimizer.state_dict(),
-                'loss': loss,
-                'voc_dict': vocab.__dict__,
-                'embedding': embedding.state_dict()
-            }, os.path.join(directory, '{}_{}.tar'.format(iteration, 'checkpoint')))
-
-
 class GreedySearchDecoder(nn.Module):
     def __init__(self, encoder, decoder, device, vocab):
         super(GreedySearchDecoder, self).__init__()
@@ -279,39 +156,164 @@ class GreedySearchDecoder(nn.Module):
         return all_tokens, all_scores
 
 
-def evaluate(encoder, decoder, searcher, vocab: Vocab, sentence, device, max_length=MAX_LENGTH):
-    ### Format input sentence as a batch
-    # words -> indexes
-    indexes_batch = [indexesFromSentence(vocab, sentence)]
-    # Create lengths tensor
-    lengths = torch.tensor([len(indexes) for indexes in indexes_batch])
-    # Transpose dimensions of batch to match models' expectations
-    input_batch = torch.LongTensor(indexes_batch).transpose(0, 1)
-    # Use appropriate device
-    input_batch = input_batch.to(device)
-    lengths = lengths.to("cpu")
-    # Decode sentence with searcher
-    tokens, scores = searcher(input_batch, lengths, max_length)
-    # indexes -> words
-    decoded_words = [vocab.itos[token.item()] for token in tokens]
-    return decoded_words
+class CPAChatBot:
 
+    def __init__(self, encoder: EncoderRNN, decoder: LuongAttnDecoderRNN,
+                 encoder_optimizer: optim.Optimizer, decoder_optimizer: optim.Optimizer,
+                 embedding: nn.Embedding, vocab: Vocab,
+                 question_answers: List[List[List[str]]], device: torch.device):
+        self.encoder: EncoderRNN = encoder
+        self.decoder: LuongAttnDecoderRNN = decoder
+        self.encoder_optimizer: optim.Optimizer = encoder_optimizer
+        self.decoder_optimizer: optim.Optimizer = decoder_optimizer
+        self.embedding: nn.Embedding = embedding
+        self.vocab: Vocab = vocab
+        self.question_answers: List[List[List[str]]] = question_answers
+        self.device: torch.device = device
 
-def evaluateInput(encoder, decoder, searcher, vocab, device):
-    input_sentence = ''
-    while (1):
-        try:
+    def evaluate(self, sentence: List[str], searcher: GreedySearchDecoder) -> List[str]:
+        indexes_batch = [indexesFromSentence(self.vocab, sentence)]
+        lengths = torch.tensor([len(indexes) for indexes in indexes_batch])
+        input_batch = torch.LongTensor(indexes_batch).transpose(0, 1)
+        input_batch = input_batch.to(self.device)
+        lengths = lengths.to("cpu")
+        tokens, scores = searcher(input_batch, lengths, MAX_LENGTH)
+        answer = []
+        for token in tokens:
+            word = self.vocab.itos[token.item()]
+            if word not in {EOS, PAD}:
+                answer.append(word)
+        return answer
+
+    def run(self):
+        searcher = GreedySearchDecoder(self.encoder, self.decoder, self.device, self.vocab)
+        while True:
             # Get input sentence
-            input_sentence = input('> ')
-            # Check if it is quit case
-            if input_sentence == 'q' or input_sentence == 'quit': break
-            # Normalize sentence
-            input_sentence = normalizeString(input_sentence)
-            # Evaluate sentence
-            output_words = evaluate(encoder, decoder, searcher, vocab, input_sentence, device)
-            # Format and print response sentence
-            output_words[:] = [x for x in output_words if not (x == EOS or x == PAD)]
-            print('Bot:', ' '.join(output_words))
+            user_input = input("You: ").lower()
+            if user_input in {'q', 'quit', 'exit'}:
+                print("Exiting...")
+                break
 
-        except KeyError:
-            print("Error: Encountered unknown word.")
+            question = normalizeString(user_input)
+            answer = self.evaluate(question, searcher)
+            print('CPA:', ' '.join(answer))
+
+    def maskNLLLoss(self, inp: torch.Tensor, target: torch.Tensor, mask):
+        nTotal = mask.sum()
+        crossEntropy = -torch.log(torch.gather(inp, 1, target.view(-1, 1)).squeeze(1))
+        loss = crossEntropy.masked_select(mask).mean()
+        loss = loss.to(self.device)
+        return loss, nTotal.item()
+
+    def train(self, input_variable, lengths, target_variable, mask, max_target_len):
+        # Zero gradients
+        self.encoder_optimizer.zero_grad()
+        self.decoder_optimizer.zero_grad()
+
+        # Set device options
+        input_variable = input_variable.to(self.device)
+        target_variable = target_variable.to(self.device)
+        mask = mask.to(self.device)
+        # Lengths for rnn packing should always be on the cpu
+        lengths = lengths.to("cpu")
+
+        # Initialize variables
+        loss = 0
+        print_losses = []
+        n_totals = 0
+
+        # Forward pass through encoder
+        encoder_outputs, encoder_hidden = self.encoder(input_variable, lengths)
+
+        # Create initial decoder input (start with SOS tokens for each sentence)
+        sos_idx = self.vocab[SOS]
+        decoder_input = torch.LongTensor([[sos_idx for _ in range(batch_size)]])
+        decoder_input = decoder_input.to(self.device)
+
+        # Set initial decoder hidden state to the encoder's final hidden state
+        decoder_hidden = encoder_hidden[:self.decoder.n_layers]
+
+        # Determine if we are using teacher forcing this iteration
+        use_teacher_forcing = True if random.random() < teacher_forcing_ratio else False
+
+        # Forward batch of sequences through decoder one time step at a time
+        if use_teacher_forcing:
+            for t in range(max_target_len):
+                decoder_output, decoder_hidden = self.decoder(
+                    decoder_input, decoder_hidden, encoder_outputs
+                )
+                # Teacher forcing: next input is current target
+                decoder_input = target_variable[t].view(1, -1)
+                # Calculate and accumulate loss
+                mask_loss, nTotal = self.maskNLLLoss(decoder_output, target_variable[t], mask[t])
+                loss += mask_loss
+                print_losses.append(mask_loss.item() * nTotal)
+                n_totals += nTotal
+        else:
+            for t in range(max_target_len):
+                decoder_output, decoder_hidden = self.decoder(
+                    decoder_input, decoder_hidden, encoder_outputs
+                )
+                # No teacher forcing: next input is decoder's own current output
+                _, topi = decoder_output.topk(1)
+                decoder_input = torch.LongTensor([[topi[i][0] for i in range(batch_size)]])
+                decoder_input = decoder_input.to(self.device)
+                # Calculate and accumulate loss
+                mask_loss, nTotal = self.maskNLLLoss(decoder_output, target_variable[t], mask[t])
+                loss += mask_loss
+                print_losses.append(mask_loss.item() * nTotal)
+                n_totals += nTotal
+
+        # Perform backpropatation
+        loss.backward()
+
+        # Clip gradients: gradients are modified in place
+        _ = nn.utils.clip_grad_norm_(self.encoder.parameters(), clip)
+        _ = nn.utils.clip_grad_norm_(self.decoder.parameters(), clip)
+
+        # Adjust model weights
+        self.encoder_optimizer.step()
+        self.decoder_optimizer.step()
+
+        return sum(print_losses) / n_totals
+
+    def trainIters(self, save_dir, save_every, loadFilename, checkpoint):
+        # Load batches for each iteration
+        training_batches = [
+            batch2TrainData(self.vocab, [random.choice(self.question_answers) for _ in range(batch_size)])
+            for _ in range(n_iteration)]
+
+        # Initializations
+        print('Initializing ...')
+        start_iteration = 1
+        print_loss = 0
+        if loadFilename:
+            start_iteration = checkpoint['iteration'] + 1
+
+        # Training loop
+        print("Training...")
+        for iteration in tqdm(range(start_iteration, n_iteration + 1), total=n_iteration + 1 - start_iteration):
+            training_batch = training_batches[iteration - 1]
+            # Extract fields from batch
+            input_variable, lengths, target_variable, mask, max_target_len = training_batch
+
+            # Run a training iteration with batch
+            loss = self.train(input_variable, lengths, target_variable, mask, max_target_len)
+            print_loss += loss
+
+            # Save checkpoint
+            if (iteration % save_every == 0):
+                directory = os.path.join(save_dir,
+                                         '{}-{}_{}'.format(encoder_n_layers, decoder_n_layers, hidden_size))
+                if not os.path.exists(directory):
+                    os.makedirs(directory)
+                torch.save({
+                    'iteration': iteration,
+                    'en': self.encoder.state_dict(),
+                    'de': self.decoder.state_dict(),
+                    'en_opt': self.encoder_optimizer.state_dict(),
+                    'de_opt': self.decoder_optimizer.state_dict(),
+                    'loss': loss,
+                    'voc_dict': self.vocab.__dict__,
+                    'embedding': self.embedding.state_dict()
+                }, os.path.join(directory, '{}_{}.tar'.format(iteration, 'checkpoint')))

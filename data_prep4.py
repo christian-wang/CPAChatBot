@@ -2,7 +2,7 @@ import itertools
 import re
 import unicodedata
 from collections import Counter
-from typing import List, Dict
+from typing import List, Dict, Tuple
 import torch
 from torchtext.legacy.vocab import Vocab
 from hyperparams import MAX_LENGTH, PAD, SOS, EOS, UNK, MIN_COUNT
@@ -65,7 +65,7 @@ def normalizeString(s) -> List[str]:
     return [word.strip() for word in s.split(' ')]
 
 
-def get_question_answers(dialogues: Dict[str, List], exchanges: List[List[str]]):
+def get_question_answers(dialogues: Dict[str, List], exchanges: List[List[str]]) -> Tuple[List[List[List[str]]], Vocab]:
     print("Start preparing training data ...")
     question_answers = []
     word_counts = dict()
@@ -88,7 +88,7 @@ def get_question_answers(dialogues: Dict[str, List], exchanges: List[List[str]])
     return question_answers, vocab
 
 
-def trimRareWords(vocab: Vocab, question_answers: List[List[str]]):
+def trimRareWords(vocab: Vocab, question_answers: List[List[List[str]]]):
     # Trim words used under the MIN_COUNT from the voc
     # Filter out pairs with trimmed words
     keep_pairs = []
@@ -112,13 +112,19 @@ def indexesFromSentence(vocab: Vocab, sentence: List) -> List[int]:
     return [vocab[word] for word in sentence] + [vocab[EOS]]
 
 
-def zeroPadding(l, pad_idx):
-    return list(itertools.zip_longest(*l, fillvalue=pad_idx))
+def zeroPadding(indexed_sentences: List[List[int]], pad_idx: int) -> List[List[int]]:
+    """
+    Return padded indexed sentences
+
+    :param indexed_sentences:  List of sentences represented as lists of word indexes
+    :param pad_idx: index of PAD token
+    """
+    return list(itertools.zip_longest(*indexed_sentences, fillvalue=pad_idx))
 
 
-def binaryMatrix(l, pad_idx):
+def binaryMatrix(padded_sentences: List[List[int]], pad_idx):
     m = []
-    for i, seq in enumerate(l):
+    for i, seq in enumerate(padded_sentences):
         m.append([])
         for token in seq:
             if token == pad_idx:
@@ -128,16 +134,16 @@ def binaryMatrix(l, pad_idx):
     return m
 
 
-def inputVar(l, vocab):
-    indexes_batch = [indexesFromSentence(vocab, sentence) for sentence in l]
+def inputVar(questions: List[List[str]], vocab: Vocab):
+    indexes_batch = [indexesFromSentence(vocab, question) for question in questions]
     lengths = torch.tensor([len(indexes) for indexes in indexes_batch])
     padList = zeroPadding(indexes_batch, vocab[PAD])
     padVar = torch.LongTensor(padList)
     return padVar, lengths
 
 
-def outputVar(l, vocab):
-    indexes_batch = [indexesFromSentence(vocab, sentence) for sentence in l]
+def outputVar(answers: List[List[str]], vocab: Vocab):
+    indexes_batch = [indexesFromSentence(vocab, answer) for answer in answers]
     max_target_len = max([len(indexes) for indexes in indexes_batch])
     padList = zeroPadding(indexes_batch, vocab[PAD])
     mask = torch.BoolTensor(binaryMatrix(padList, vocab[PAD]))
@@ -145,12 +151,13 @@ def outputVar(l, vocab):
     return padVar, mask, max_target_len
 
 
-def batch2TrainData(vocab: Vocab, pair_batch: List[List[str]]):
+def batch2TrainData(vocab: Vocab, pair_batch: List[List[List[str]]]):
     pair_batch.sort(key=lambda x: len(x[0]), reverse=True)
-    input_batch, output_batch = [], []
-    for pair in pair_batch:
-        input_batch.append(pair[0])
-        output_batch.append(pair[1])
+    input_batch: List[List[str]] = []
+    output_batch: List[List[str]] = []
+    for question, answer in pair_batch:
+        input_batch.append(question)
+        output_batch.append(answer)
     inp, lengths = inputVar(input_batch, vocab)
     output, mask, max_target_len = outputVar(output_batch, vocab)
     return inp, lengths, output, mask, max_target_len
