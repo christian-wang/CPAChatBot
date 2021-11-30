@@ -5,9 +5,9 @@ import torch
 from torch import nn as nn
 from torch.nn import functional as F
 from tqdm import tqdm
-
+from torchtext.legacy.vocab import Vocab
 from data_prep4 import batch2TrainData, indexesFromSentence, normalizeString
-from hyperparams import MAX_LENGTH, SOS_token, teacher_forcing_ratio, hidden_size
+from hyperparams import MAX_LENGTH, teacher_forcing_ratio, hidden_size, SOS, EOS, PAD
 
 
 class EncoderRNN(nn.Module):
@@ -129,8 +129,8 @@ def maskNLLLoss(inp, target, mask, device):
     return loss, nTotal.item()
 
 
-def train(input_variable, lengths, target_variable, mask, max_target_len, encoder, decoder, embedding,
-          encoder_optimizer, decoder_optimizer, batch_size, clip, device, max_length=MAX_LENGTH):
+def train(input_variable, lengths, target_variable, mask, max_target_len, encoder, decoder,
+          encoder_optimizer, decoder_optimizer, batch_size, clip, device, sos_idx):
     # Zero gradients
     encoder_optimizer.zero_grad()
     decoder_optimizer.zero_grad()
@@ -151,7 +151,7 @@ def train(input_variable, lengths, target_variable, mask, max_target_len, encode
     encoder_outputs, encoder_hidden = encoder(input_variable, lengths)
 
     # Create initial decoder input (start with SOS tokens for each sentence)
-    decoder_input = torch.LongTensor([[SOS_token for _ in range(batch_size)]])
+    decoder_input = torch.LongTensor([[sos_idx for _ in range(batch_size)]])
     decoder_input = decoder_input.to(device)
 
     # Set initial decoder hidden state to the encoder's final hidden state
@@ -202,11 +202,11 @@ def train(input_variable, lengths, target_variable, mask, max_target_len, encode
     return sum(print_losses) / n_totals
 
 
-def trainIters(model_name, voc, pairs, encoder, decoder, encoder_optimizer, decoder_optimizer, embedding,
+def trainIters(model_name, vocab, pairs, encoder, decoder, encoder_optimizer, decoder_optimizer, embedding,
                encoder_n_layers, decoder_n_layers, save_dir, n_iteration, batch_size, save_every, clip,
                loadFilename, device, checkpoint):
     # Load batches for each iteration
-    training_batches = [batch2TrainData(voc, [random.choice(pairs) for _ in range(batch_size)])
+    training_batches = [batch2TrainData(vocab, [random.choice(pairs) for _ in range(batch_size)])
                         for _ in range(n_iteration)]
 
     # Initializations
@@ -225,7 +225,7 @@ def trainIters(model_name, voc, pairs, encoder, decoder, encoder_optimizer, deco
 
         # Run a training iteration with batch
         loss = train(input_variable, lengths, target_variable, mask, max_target_len, encoder,
-                     decoder, embedding, encoder_optimizer, decoder_optimizer, batch_size, clip, device)
+                     decoder, encoder_optimizer, decoder_optimizer, batch_size, clip, device, vocab[SOS])
         print_loss += loss
 
         # Save checkpoint
@@ -241,17 +241,18 @@ def trainIters(model_name, voc, pairs, encoder, decoder, encoder_optimizer, deco
                 'en_opt': encoder_optimizer.state_dict(),
                 'de_opt': decoder_optimizer.state_dict(),
                 'loss': loss,
-                'voc_dict': voc.__dict__,
+                'voc_dict': vocab.__dict__,
                 'embedding': embedding.state_dict()
             }, os.path.join(directory, '{}_{}.tar'.format(iteration, 'checkpoint')))
 
 
 class GreedySearchDecoder(nn.Module):
-    def __init__(self, encoder, decoder, device):
+    def __init__(self, encoder, decoder, device, vocab):
         super(GreedySearchDecoder, self).__init__()
         self.encoder = encoder
         self.decoder = decoder
         self.device = device
+        self.sos_idx = vocab[SOS]
 
     def forward(self, input_seq, input_length, max_length):
         # Forward input through encoder model
@@ -259,7 +260,7 @@ class GreedySearchDecoder(nn.Module):
         # Prepare encoder's final hidden layer to be first hidden input to the decoder
         decoder_hidden = encoder_hidden[:self.decoder.n_layers]
         # Initialize decoder input with SOS_token
-        decoder_input = torch.ones(1, 1, device=self.device, dtype=torch.long) * SOS_token
+        decoder_input = torch.ones(1, 1, device=self.device, dtype=torch.long) * self.sos_idx
         # Initialize tensors to append decoded words to
         all_tokens = torch.zeros([0], device=self.device, dtype=torch.long)
         all_scores = torch.zeros([0], device=self.device)
@@ -278,10 +279,10 @@ class GreedySearchDecoder(nn.Module):
         return all_tokens, all_scores
 
 
-def evaluate(encoder, decoder, searcher, voc, sentence, device, max_length=MAX_LENGTH):
+def evaluate(encoder, decoder, searcher, vocab: Vocab, sentence, device, max_length=MAX_LENGTH):
     ### Format input sentence as a batch
     # words -> indexes
-    indexes_batch = [indexesFromSentence(voc, sentence)]
+    indexes_batch = [indexesFromSentence(vocab, sentence)]
     # Create lengths tensor
     lengths = torch.tensor([len(indexes) for indexes in indexes_batch])
     # Transpose dimensions of batch to match models' expectations
@@ -292,11 +293,11 @@ def evaluate(encoder, decoder, searcher, voc, sentence, device, max_length=MAX_L
     # Decode sentence with searcher
     tokens, scores = searcher(input_batch, lengths, max_length)
     # indexes -> words
-    decoded_words = [voc.index2word[token.item()] for token in tokens]
+    decoded_words = [vocab.itos[token.item()] for token in tokens]
     return decoded_words
 
 
-def evaluateInput(encoder, decoder, searcher, voc, device):
+def evaluateInput(encoder, decoder, searcher, vocab, device):
     input_sentence = ''
     while (1):
         try:
@@ -307,9 +308,9 @@ def evaluateInput(encoder, decoder, searcher, voc, device):
             # Normalize sentence
             input_sentence = normalizeString(input_sentence)
             # Evaluate sentence
-            output_words = evaluate(encoder, decoder, searcher, voc, input_sentence, device)
+            output_words = evaluate(encoder, decoder, searcher, vocab, input_sentence, device)
             # Format and print response sentence
-            output_words[:] = [x for x in output_words if not (x == 'EOS' or x == 'PAD')]
+            output_words[:] = [x for x in output_words if not (x == EOS or x == PAD)]
             print('Bot:', ' '.join(output_words))
 
         except KeyError:

@@ -6,8 +6,8 @@ import codecs
 
 from torch import optim
 
-from data_prep4 import loadPrepareData, trimRareWords, batch2TrainData, load_dialogues, load_exchanges, Voc
-from hyperparams import MIN_COUNT, clip, learning_rate, decoder_learning_ratio, n_iteration, save_every, \
+from data_prep4 import get_question_answers, trimRareWords, batch2TrainData, load_dialogues, load_exchanges
+from hyperparams import clip, learning_rate, decoder_learning_ratio, n_iteration, save_every, \
     model_name, attn_model, hidden_size, encoder_n_layers, decoder_n_layers, dropout, batch_size, small_batch_size
 from model import EncoderRNN, LuongAttnDecoderRNN, trainIters, GreedySearchDecoder, evaluateInput
 
@@ -30,12 +30,10 @@ print("\nLoading conversations...")
 exchanges = load_exchanges(os.path.join(corpus, "movie_conversations.txt"))
 
 save_dir = os.path.join("data", "save")
-voc = Voc()
-question_answers = loadPrepareData(voc, dialogues, exchanges)
+question_answers, vocab = get_question_answers(dialogues, exchanges)
+pairs = trimRareWords(vocab, question_answers)
 
-pairs = trimRareWords(voc, question_answers, MIN_COUNT)
-
-batches = batch2TrainData(voc, [random.choice(pairs) for _ in range(small_batch_size)])
+batches = batch2TrainData(vocab, [random.choice(pairs) for _ in range(small_batch_size)])
 input_variable, lengths, target_variable, mask, max_target_len = batches
 
 print("input_variable:", input_variable)
@@ -58,14 +56,14 @@ if loadFilename:
     encoder_optimizer_sd = checkpoint['en_opt']
     decoder_optimizer_sd = checkpoint['de_opt']
     embedding_sd = checkpoint['embedding']
-    voc.__dict__ = checkpoint['voc_dict']
+    vocab.__dict__ = checkpoint['voc_dict']
 
 print('Building encoder and decoder ...')
-embedding = nn.Embedding(voc.num_words, hidden_size)
+embedding = nn.Embedding(len(vocab), hidden_size)
 if loadFilename:
     embedding.load_state_dict(embedding_sd)
 encoder = EncoderRNN(hidden_size, embedding, encoder_n_layers, dropout)
-decoder = LuongAttnDecoderRNN(attn_model, embedding, hidden_size, voc.num_words, decoder_n_layers, dropout)
+decoder = LuongAttnDecoderRNN(attn_model, embedding, hidden_size, len(vocab), decoder_n_layers, dropout)
 if loadFilename:
     encoder.load_state_dict(encoder_sd)
     decoder.load_state_dict(decoder_sd)
@@ -94,13 +92,13 @@ for state in decoder_optimizer.state.values():
             state[k] = v.cuda()
 
 print("Starting Training!")
-trainIters(model_name, voc, pairs, encoder, decoder, encoder_optimizer, decoder_optimizer,
+trainIters(model_name, vocab, pairs, encoder, decoder, encoder_optimizer, decoder_optimizer,
            embedding, encoder_n_layers, decoder_n_layers, save_dir, n_iteration, batch_size,
            save_every, clip, loadFilename, device, checkpoint)
 
 encoder.eval()
 decoder.eval()
 
-searcher = GreedySearchDecoder(encoder, decoder, device)
+searcher = GreedySearchDecoder(encoder, decoder, device, vocab)
 
-evaluateInput(encoder, decoder, searcher, voc, device)
+# evaluateInput(encoder, decoder, searcher, vocab, device)
