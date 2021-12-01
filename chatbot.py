@@ -150,7 +150,7 @@ def main(in_notebook=False):
     encoder.eval()
     decoder.eval()
 
-    # cpa.run()
+    cpa.run()
 
 
 main(in_notebook=True)

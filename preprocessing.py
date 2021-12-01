@@ -38,7 +38,7 @@ def normalize(text: str) -> List[str]:
     """
     Tokenizes English text from a string into a list of strings
     """
-    return [tok.text.strip() for tok in spacy_en.tokenizer(text) if tok.text.strip()]
+    return [tok.text.strip().lower() for tok in spacy_en.tokenizer(text) if tok.text.strip()]
 
 
 def load_dialogues(file_name: str) -> Dict[str, List]:
