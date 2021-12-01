@@ -8,7 +8,12 @@ from typing import List, Dict, Tuple
 from torchtext.legacy.vocab import Vocab
 from hyperparams import MAX_SENTENCE_LENGTH, PAD, SOS, EOS, UNK, MIN_WORD_COUNT
 
-spacy_en = spacy.load('en_core_web_sm')
+try:
+    spacy_en = spacy.load('en_core_web_sm')
+except OSError:
+    print("Missing spacy language model, run \"python3 -m spacy download en_core_web_sm\".")
+    print("Exiting...")
+    exit(1)
 
 
 def load_exchanges(file_name: str) -> List[List[str]]:
