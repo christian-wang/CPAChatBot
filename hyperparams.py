@@ -7,7 +7,7 @@ UNK = '<unk>'
 MAX_SENTENCE_LENGTH = 10
 
 # minimum word count
-MIN_WORD_COUNT = 3
+MIN_WORD_COUNT = 1
 
 # max norm for gradient clipping
 CLIP = 50.0

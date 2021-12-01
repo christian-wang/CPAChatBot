@@ -1,6 +1,7 @@
 import itertools
 import torch
 import spacy
+import re
 from tqdm import tqdm
 from collections import Counter
 from typing import List, Dict, Tuple
@@ -38,6 +39,8 @@ def normalize(text: str) -> List[str]:
     """
     Tokenizes English text from a string into a list of strings
     """
+    text = re.sub(r'[^!?.,\w\s]+', '', text)
+    text = text.replace('...', ' ')
     return [tok.text.strip().lower() for tok in spacy_en.tokenizer(text) if tok.text.strip()]
 
 
@@ -84,7 +87,8 @@ def get_question_answers(dialogues: Dict[str, List], exchanges: List[List[str]])
                         word_counts[word] += 1
     print("Using {}/{} question-answer pairs.".format(len(question_answers), len(exchanges)))
     word_counter = Counter(word_counts)
-    # TODO add vectors
+
+    # TODO add vectors, look at the Vocab class for details
     vocab = Vocab(word_counter, min_freq=MIN_WORD_COUNT, specials=(PAD, SOS, EOS, UNK))
     return question_answers, vocab
 

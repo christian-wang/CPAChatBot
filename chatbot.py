@@ -155,4 +155,4 @@ def main(in_notebook=False):
     cpa.run()
 
 
-main(in_notebook=True)
+main(in_notebook=False)
