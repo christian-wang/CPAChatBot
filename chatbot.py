@@ -1,10 +1,10 @@
 import torch
 import torch.nn as nn
 import argparse
-from torch import optim
-from data_prep4 import get_question_answers, load_dialogues, load_exchanges
 import hyperparams as hp
-from model import EncoderRNN, LuongAttnDecoderRNN, CPAChatBot
+from torch import optim
+from preprocessing import get_question_answers, load_dialogues, load_exchanges
+from model import EncoderRNN, DecoderRNN, CPAChatBot
 
 
 def parse_args():
@@ -18,9 +18,10 @@ def parse_args():
 
     prep_parser = parser.add_argument_group('Preprocessing')
     prep_parser.add_argument('--conversations_file', type=str, default='corpus/movie_conversations.txt',
-                        help='Path to movie_conversations.txt')
+                             help='Path to movie_conversations.txt')
     prep_parser.add_argument('--lines_file', type=str, default='corpus/movie_lines.txt', help='Path to movie_lines.txt')
-    prep_parser.add_argument('--max-sentence-length', type=int, default=hp.MAX_SENTENCE_LENGTH, help='Maximum number of words in question')
+    prep_parser.add_argument('--max-sentence-length', type=int, default=hp.MAX_SENTENCE_LENGTH,
+                             help='Maximum number of words in question')
     prep_parser.add_argument('--min-word-count', type=int, default=hp.MIN_WORD_COUNT,
                              help='Minimum number of times a word can appear to be included in vocabulary')
 
@@ -50,34 +51,47 @@ def parse_args():
 
 
 def main(in_notebook=False):
-
+    """
+    Main function
+    :param in_notebook: whether or not we are running in a notebook
+    """
     if in_notebook:
+        # run in notebook mode, so we don't parse command line arguments
         load_file = None
         save_file = None
         lines_file = 'drive/MyDrive/chatbot2/movie_lines.txt'
         conversations_file = 'drive/MyDrive/chatbot2/movie_conversations.txt'
     else:
+        # run in command-line mode
         args = parse_args()
         load_file = args.load
         save_file = args.save
         lines_file = args.lines_file
         conversations_file = args.conversations_file
 
-    # uncomment these lines when running on command line
-
+    # use gpu if available
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    print("\nProcessing corpus...")
+    # load the data
+    print("\nReading movie lines...")
     dialogues = load_dialogues(lines_file)
-    print("\nLoading conversations...")
+
+    # load the conversations
+    print("Loading conversations...")
     exchanges = load_exchanges(conversations_file)
 
+    # build the vocabulary
+    print("Building vocabulary...")
     question_answers, vocab = get_question_answers(dialogues, exchanges)
 
+    # define variables so IDE doesn't worry
+    embedding_sd = encoder_sd = decoder_sd = encoder_optimizer_sd = \
+        decoder_optimizer_sd = prev_iteration = None
+
     if load_file:
-        # If loading on same machine the model was trained on
+        # load the model from file
+        print("Loading model from file...")
         checkpoint = torch.load(load_file)
-        # If loading a model trained on GPU to CPU
         encoder_sd = checkpoint['en']
         decoder_sd = checkpoint['de']
         encoder_optimizer_sd = checkpoint['en_opt']
@@ -86,18 +100,21 @@ def main(in_notebook=False):
         vocab.__dict__ = checkpoint['voc_dict']
         prev_iteration = checkpoint['iteration']
 
-    print('Building encoder and decoder ...')
-    embedding = nn.Embedding(len(vocab), hp.HIDDEN_LAYER_DIM)
+    # create word embeddings
+    embeddings = nn.Embedding(len(vocab), hp.HIDDEN_LAYER_DIM)
+
     if load_file:
-        embedding.load_state_dict(embedding_sd)
-    encoder = EncoderRNN(hp.HIDDEN_LAYER_DIM, embedding, hp.ENCODER_LAYERS, hp.DROPOUT)
-    decoder = LuongAttnDecoderRNN(hp.ATTENTION_TYPE, embedding, hp.HIDDEN_LAYER_DIM, len(vocab), hp.DECODER_LAYERS, hp.DROPOUT)
+        # load embeddings from file
+        embeddings.load_state_dict(embedding_sd)
+
+    print("Building neural nets...")
+    encoder = EncoderRNN(embeddings)
+    decoder = DecoderRNN(embeddings, len(vocab))
     if load_file:
         encoder.load_state_dict(encoder_sd)
         decoder.load_state_dict(decoder_sd)
     encoder = encoder.to(device)
     decoder = decoder.to(device)
-    print('Models built and ready to go!')
 
     encoder.train()
     decoder.train()
@@ -105,29 +122,26 @@ def main(in_notebook=False):
     print('Building optimizers ...')
     encoder_optimizer = optim.Adam(encoder.parameters(), lr=hp.LEARNING_RATE)
     decoder_optimizer = optim.Adam(decoder.parameters(), lr=hp.LEARNING_RATE * hp.DECODER_LEARNING_RATIO)
+
     if load_file:
         encoder_optimizer.load_state_dict(encoder_optimizer_sd)
         decoder_optimizer.load_state_dict(decoder_optimizer_sd)
 
-    for state in encoder_optimizer.state.values():
-        for k, v in state.items():
-            if isinstance(v, torch.Tensor):
-                state[k] = v.cuda()
+    for optimizer in (encoder_optimizer, decoder_optimizer):
+        for state in optimizer.state.values():
+            for k, v in state.items():
+                if isinstance(v, torch.Tensor):
+                    state[k] = v.cuda()
 
-    for state in decoder_optimizer.state.values():
-        for k, v in state.items():
-            if isinstance(v, torch.Tensor):
-                state[k] = v.cuda()
-
-    print("Starting Training!")
+    print("Training...")
 
     cpa = CPAChatBot(encoder, decoder, encoder_optimizer, decoder_optimizer,
-                     embedding, vocab, question_answers, device)
+                     embeddings, vocab, question_answers, device)
 
     if load_file:
-        cpa.trainIters(save_file, prev_iteration)
+        cpa.train(save_file, prev_iteration)
     else:
-        cpa.trainIters(save_file)
+        cpa.train(save_file)
 
     encoder.eval()
     decoder.eval()

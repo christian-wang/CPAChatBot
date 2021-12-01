@@ -1,9 +1,11 @@
 import itertools
 import re
 import unicodedata
+import torch
+
+from tqdm import tqdm
 from collections import Counter
 from typing import List, Dict, Tuple
-import torch
 from torchtext.legacy.vocab import Vocab
 from hyperparams import MAX_SENTENCE_LENGTH, PAD, SOS, EOS, UNK, MIN_WORD_COUNT
 
@@ -18,7 +20,7 @@ def load_exchanges(file_name: str) -> List[List[str]]:
     exchanges = []
     try:
         with open(file_name, encoding='utf-8', errors='ignore') as f:
-            for line in f:
+            for line in tqdm(f):
                 conversation = line.strip().split(' +++$+++ ')[-1][1:-1].replace("'", "").split(", ")
                 for i in range(len(conversation) - 1):
                     question_id = conversation[i]
@@ -40,7 +42,7 @@ def load_dialogues(file_name: str) -> Dict[str, List]:
     dialogues = dict()
     try:
         with open(file_name, encoding='utf-8', errors='ignore') as f:
-            for line in f:
+            for line in tqdm(f):
                 line_id, character_id, movie_id, character_name, text = line.rstrip('\n').split(' +++$+++ ')
                 dialogue = normalizeString(text)
                 dialogues[line_id] = dialogue
@@ -69,7 +71,7 @@ def get_question_answers(dialogues: Dict[str, List], exchanges: List[List[str]])
     print("Start preparing training data ...")
     question_answers = []
     word_counts = dict()
-    for question_id, answer_id in exchanges:
+    for question_id, answer_id in tqdm(exchanges, total=len(exchanges)):
         question = dialogues[question_id]
         answer = dialogues[answer_id]
 
