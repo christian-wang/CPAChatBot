@@ -65,7 +65,7 @@ def main(in_notebook=False):
     if in_notebook:
         # run in notebook mode, so we don't parse command line arguments
         load_file = None
-        save_file = None
+        save_file = 'model.pt'
         lines_file = 'drive/MyDrive/chatbot2/movie_lines.txt'
         conversations_file = 'drive/MyDrive/chatbot2/movie_conversations.txt'
     else:
@@ -155,4 +155,5 @@ def main(in_notebook=False):
     cpa.run()
 
 
-main(in_notebook=False)
+if __name__ == "__main__":
+    main(in_notebook=False)

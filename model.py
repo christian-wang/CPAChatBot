@@ -136,7 +136,7 @@ class CPAChatBot:
         lengths = torch.tensor([len(indexes) for indexes in indexes_batch])
         input_batch = torch.LongTensor(indexes_batch).transpose(0, 1)
         input_batch = input_batch.to(self.device)
-        lengths = lengths.to(self.device)
+        lengths = lengths.to("cpu")
         tokens, scores = searcher(input_batch, lengths, hp.MAX_SENTENCE_LENGTH)
         answer = []
         for token in tokens:
