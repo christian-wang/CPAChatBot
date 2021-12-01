@@ -70,7 +70,7 @@ def get_question_answers(dialogues: Dict[str, List], exchanges: List[List[str]])
     """
     question_answers = []
     word_counts = dict()
-    for question_id, answer_id in tqdm(exchanges, total=len(exchanges)):
+    for question_id, answer_id in exchanges:
         question = dialogues[question_id]
         answer = dialogues[answer_id]
 
@@ -176,5 +176,5 @@ def get_training_batch(question_answer_batch: List[List[List[str]]], vocab: Voca
         question_batch.append(question)
         answer_batch.append(answer)
     padded_question_batch, question_lengths = prepare_question_batch(question_batch, vocab)
-    answer_batch, mask, max_answer_len = prepare_answer_batch(answer_batch, vocab)
-    return padded_question_batch, question_lengths, answer_batch, mask, max_answer_len
+    answer_batch, answer_mask, max_answer_len = prepare_answer_batch(answer_batch, vocab)
+    return padded_question_batch, question_lengths, answer_batch, answer_mask, max_answer_len

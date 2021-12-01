@@ -1,16 +1,20 @@
 import random
 import torch
 import hyperparams as hp
-from typing import List
+from typing import List, Tuple
 from torch import nn as nn, optim
 from torch.nn import functional
 from tqdm import tqdm
 from torchtext.legacy.vocab import Vocab
-from attention import DotAttention
+from attention import Attention
 from preprocessing import get_training_batch, words_to_ints, normalize
 
 
 class EncoderRNN(nn.Module):
+    """
+    Stacked bidirectional RNN with GRU and dropout
+    """
+
     def __init__(self, embedding):
         super(EncoderRNN, self).__init__()
         self.embedding = embedding
@@ -22,6 +26,9 @@ class EncoderRNN(nn.Module):
                           bidirectional=True)
 
     def forward(self, input_seq, input_lengths, hidden=None):
+        """
+        Encoder forward pass
+        """
         embedded = self.embedding(input_seq)
         packed = nn.utils.rnn.pack_padded_sequence(embedded, input_lengths)
         outputs, hidden = self.gru(packed, hidden)
@@ -31,6 +38,10 @@ class EncoderRNN(nn.Module):
 
 
 class DecoderRNN(nn.Module):
+    """
+    Stacked unidirectional RNN with GRU and dropout
+    """
+
     def __init__(self, embedding, output_size):
         super(DecoderRNN, self).__init__()
 
@@ -43,10 +54,12 @@ class DecoderRNN(nn.Module):
                           dropout=(0 if hp.DECODER_LAYERS == 1 else hp.DROPOUT))
         self.concat = nn.Linear(hp.HIDDEN_LAYER_DIM * 2, hp.HIDDEN_LAYER_DIM)
         self.out = nn.Linear(hp.HIDDEN_LAYER_DIM, output_size)
-
-        self.attention = DotAttention()
+        self.attention = Attention.build(hp.ATTENTION_TYPE)
 
     def forward(self, input_step, last_hidden, encoder_outputs):
+        """
+        Forward pass through the decoder
+        """
         embedded = self.embedding(input_step)
         embedded = self.embedding_dropout(embedded)
         rnn_output, hidden = self.gru(embedded, last_hidden)
@@ -62,6 +75,11 @@ class DecoderRNN(nn.Module):
 
 
 class GreedySearchDecoder(nn.Module):
+    """
+    Greedy decoder.
+    Computes argmax at every step of decoder to generate word.
+    """
+
     def __init__(self, encoder, decoder, device, vocab):
         super(GreedySearchDecoder, self).__init__()
         self.encoder = encoder
@@ -70,6 +88,9 @@ class GreedySearchDecoder(nn.Module):
         self.sos_idx = vocab[hp.SOS]
 
     def forward(self, input_seq, input_length, max_length):
+        """
+        Greedy decoder forward pass.
+        """
         encoder_outputs, encoder_hidden = self.encoder(input_seq, input_length)
 
         decoder_hidden = encoder_hidden[:hp.DECODER_LAYERS]
@@ -86,6 +107,10 @@ class GreedySearchDecoder(nn.Module):
 
 
 class CPAChatBot:
+    """
+    ChatBot class. This class is responsible for training and evaluating the model.
+    """
+
     def __init__(self, encoder: EncoderRNN, decoder: DecoderRNN,
                  encoder_optimizer: optim.Optimizer, decoder_optimizer: optim.Optimizer,
                  embedding: nn.Embedding, vocab: Vocab,
@@ -100,6 +125,13 @@ class CPAChatBot:
         self.device: torch.device = device
 
     def evaluate(self, sentence: List[str], searcher: GreedySearchDecoder) -> List[str]:
+        """
+        Returns a response given an input sentence.
+
+        :param sentence: Input sentence.
+        :param searcher: Decoder used to generate response.
+        :return: Response sentence.
+        """
         indexes_batch = [words_to_ints(self.vocab, sentence)]
         lengths = torch.tensor([len(indexes) for indexes in indexes_batch])
         input_batch = torch.LongTensor(indexes_batch).transpose(0, 1)
@@ -114,6 +146,9 @@ class CPAChatBot:
         return answer
 
     def run(self):
+        """
+        Runs the ChatBot. Takes user input via command-line and prints responses.
+        """
         searcher = GreedySearchDecoder(self.encoder, self.decoder, self.device, self.vocab)
         while True:
             # Get input sentence
@@ -126,27 +161,44 @@ class CPAChatBot:
             answer = self.evaluate(question, searcher)
             print('CPA:', ' '.join(answer))
 
-    def log_likelihood(self, decoder_output: torch.Tensor, target: torch.Tensor, mask: torch.Tensor):
-        cross_entropy = -torch.log(torch.gather(decoder_output, 1, target.view(-1, 1)).squeeze(1))
+    def log_likelihood(self, decoder_output: torch.Tensor, ground_truth: torch.Tensor,
+                       mask: torch.Tensor) -> torch.Tensor:
+        """
+        Calculate mean negative log likelihood of the target given the decoder output.
+        Ignores the padding tokens.
+
+        :param decoder_output: Decoder output tensor.
+        :param ground_truth: Ground-truth answer tensor.
+        :param mask: Mask tensor
+        :return: Mean negative log likelihood.
+        """
+        cross_entropy = -torch.log(torch.gather(decoder_output, 1, ground_truth.view(-1, 1)).squeeze(1))
         loss = cross_entropy.masked_select(mask).mean()
         loss = loss.to(self.device)
         return loss
 
-    def train_batch(self, batch):
-        input_variable, lengths, target_variable, mask, max_target_len = batch
+    def train_batch(self, batch: Tuple):
+        """
+        Train against a batch of question-answers.
+
+        :param batch: 5-tuple of (question_batch, question_lengths,
+                      answer_batch, answer_mask, max_answer_len)
+        :return: Average loss.
+        """
+        question_batch, question_lengths, answer_batch, answer_mask, max_answer_len = batch
         self.encoder_optimizer.zero_grad()
         self.decoder_optimizer.zero_grad()
 
-        input_variable = input_variable.to(self.device)
-        target_variable = target_variable.to(self.device)
-        mask = mask.to(self.device)
-        lengths = lengths.to("cpu")
+        question_batch = question_batch.to(self.device)
+        answer_batch = answer_batch.to(self.device)
+        answer_mask = answer_mask.to(self.device)
+        question_lengths = question_lengths.to("cpu")
 
         loss = 0
         losses = []
         n_totals = 0
 
-        encoder_outputs, encoder_hidden = self.encoder(input_variable, lengths)
+        encoder_outputs, encoder_hidden = self.encoder(question_batch, question_lengths)
 
         sos_idx = self.vocab[hp.SOS]
         decoder_input = torch.LongTensor([[sos_idx for _ in range(hp.BATCH_SIZE)]])
@@ -154,20 +206,21 @@ class CPAChatBot:
 
         decoder_hidden = encoder_hidden[:hp.DECODER_LAYERS]
 
+        # teacher forcing, use the ground-truth target as the next input if True
         use_teacher_forcing = True if random.random() < hp.TEACHER_FORCING else False
 
-        for t in range(max_target_len):
+        for t in range(max_answer_len):
             decoder_output, decoder_hidden = self.decoder(decoder_input,
                                                           decoder_hidden,
                                                           encoder_outputs)
             if use_teacher_forcing:
-                decoder_input = target_variable[t].view(1, -1)
+                decoder_input = answer_batch[t].view(1, -1)
             else:
                 _, topi = decoder_output.topk(1)
                 decoder_input = torch.LongTensor([[topi[i][0] for i in range(hp.BATCH_SIZE)]])
                 decoder_input = decoder_input.to(self.device)
-            mask_loss = self.log_likelihood(decoder_output, target_variable[t], mask[t])
-            mask_sum = mask[t].sum().item()
+            mask_loss = self.log_likelihood(decoder_output, answer_batch[t], answer_mask[t])
+            mask_sum = answer_mask[t].sum().item()
             loss += mask_loss
             losses.append(mask_loss.item() * mask_sum)
             n_totals += mask_sum
@@ -176,13 +229,19 @@ class CPAChatBot:
         nn.utils.clip_grad_norm_(self.encoder.parameters(), hp.CLIP)
         nn.utils.clip_grad_norm_(self.decoder.parameters(), hp.CLIP)
 
-        # Adjust model weights
+        # adjust weights
         self.encoder_optimizer.step()
         self.decoder_optimizer.step()
 
         return sum(losses) / n_totals
 
-    def train(self, save_path, prev_iteration=0):
+    def train(self, save_path: str, prev_iteration: int = 0):
+        """
+        Train model.
+
+        :param save_path: Path to save model.
+        :param prev_iteration: Previous iteration number. 0 if new training.
+        """
         training_batches = [
             get_training_batch([random.choice(self.question_answers) for _ in range(hp.BATCH_SIZE)], self.vocab)
             for _ in range(hp.ITERATIONS)]

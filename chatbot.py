@@ -27,12 +27,17 @@ def parse_args():
 
     train_parser = parser.add_argument_group('Training arguments and hyperparameters')
     train_parser.add_argument('--iterations', type=int, default=hp.ITERATIONS, help='Number of iterations to train')
-    train_parser.add_argument('--learning-rate', type=float, default=hp.LEARNING_RATE, help='Learning rate')
+    train_parser.add_argument('--encoder-learning-rate', type=float, default=hp.ENCODER_LEARNING_RATE,
+                              help='Learning rate for encoder')
+    train_parser.add_argument('--decoder-learning-rate', type=float, default=hp.DECODER_LEARNING_RATE,
+                              help='Learning rate for decoder')
     train_parser.add_argument('--save-every', type=int, default=hp.SAVE_EVERY, help='Save model every n iterations')
     train_parser.add_argument('--encoder-layers', type=int, default=hp.ENCODER_LAYERS, help='Number of encoder layers')
     train_parser.add_argument('--decoder-layers', type=int, default=hp.DECODER_LAYERS, help='Number of decoder layers')
     train_parser.add_argument('--dropout', type=float, default=hp.DROPOUT, help='Dropout rate')
     train_parser.add_argument('--batch-size', type=int, default=hp.BATCH_SIZE, help='Batch size')
+    train_parser.add_argument('--attention-type', type=str, choices=('dot', 'mul', 'add'), default=hp.ATTENTION_TYPE,
+                              help='Attention type')
 
     args = parser.parse_args()
 
@@ -120,8 +125,8 @@ def main(in_notebook=False):
     decoder.train()
 
     print('Building optimizers ...')
-    encoder_optimizer = optim.Adam(encoder.parameters(), lr=hp.LEARNING_RATE)
-    decoder_optimizer = optim.Adam(decoder.parameters(), lr=hp.LEARNING_RATE * hp.DECODER_LEARNING_RATIO)
+    encoder_optimizer = optim.Adam(encoder.parameters(), lr=hp.ENCODER_LEARNING_RATE)
+    decoder_optimizer = optim.Adam(decoder.parameters(), lr=hp.DECODER_LEARNING_RATE)
 
     if load_file:
         encoder_optimizer.load_state_dict(encoder_optimizer_sd)
@@ -134,7 +139,6 @@ def main(in_notebook=False):
                     state[k] = v.cuda()
 
     print("Training...")
-
     cpa = CPAChatBot(encoder, decoder, encoder_optimizer, decoder_optimizer,
                      embeddings, vocab, question_answers, device)
 
