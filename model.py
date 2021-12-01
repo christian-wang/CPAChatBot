@@ -7,7 +7,7 @@ from torch.nn import functional
 from tqdm import tqdm
 from torchtext.legacy.vocab import Vocab
 from attention import DotAttention
-from preprocessing import batch2TrainData, indexesFromSentence, normalizeString
+from preprocessing import get_training_batch, words_to_ints, normalize
 
 
 class EncoderRNN(nn.Module):
@@ -100,7 +100,7 @@ class CPAChatBot:
         self.device: torch.device = device
 
     def evaluate(self, sentence: List[str], searcher: GreedySearchDecoder) -> List[str]:
-        indexes_batch = [indexesFromSentence(self.vocab, sentence)]
+        indexes_batch = [words_to_ints(self.vocab, sentence)]
         lengths = torch.tensor([len(indexes) for indexes in indexes_batch])
         input_batch = torch.LongTensor(indexes_batch).transpose(0, 1)
         input_batch = input_batch.to(self.device)
@@ -122,7 +122,7 @@ class CPAChatBot:
                 print("Exiting...")
                 break
 
-            question = normalizeString(user_input)
+            question = normalize(user_input)
             answer = self.evaluate(question, searcher)
             print('CPA:', ' '.join(answer))
 
@@ -184,7 +184,7 @@ class CPAChatBot:
 
     def train(self, save_path, prev_iteration=0):
         training_batches = [
-            batch2TrainData(self.vocab, [random.choice(self.question_answers) for _ in range(hp.BATCH_SIZE)])
+            get_training_batch([random.choice(self.question_answers) for _ in range(hp.BATCH_SIZE)], self.vocab)
             for _ in range(hp.ITERATIONS)]
 
         start_iteration = prev_iteration + 1
