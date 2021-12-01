@@ -45,12 +45,14 @@ def parse_args():
     hp.MAX_SENTENCE_LENGTH = args.max_sentence_length
     hp.MIN_WORD_COUNT = args.min_word_count
     hp.ITERATIONS = args.iterations
-    hp.LEARNING_RATE = args.learning_rate
+    hp.ENCODER_LEARNING_RATE = args.encoder_learning_rate
+    hp.DECODER_LEARNING_RATE = args.decoder_learning_rate
     hp.SAVE_EVERY = args.save_every
     hp.ENCODER_LAYERS = args.encoder_layers
     hp.DECODER_LAYERS = args.decoder_layers
     hp.DROPOUT = args.dropout
     hp.BATCH_SIZE = args.batch_size
+    hp.ATTENTION_TYPE = args.attention_type
 
     return args
 
