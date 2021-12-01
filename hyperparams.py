@@ -1,22 +1,24 @@
-MAX_LENGTH = 10  # Maximum sentence length to consider
-MIN_COUNT = 3  # Minimum word count threshold for trimming
-PAD_token = 0  # Used for padding short sentences
 PAD = '<pad>'
 SOS = '<sos>'
 EOS = '<eos>'
 UNK = '<unk>'
-clip = 50.0
-teacher_forcing_ratio = 1.0
-learning_rate = 0.0001
-decoder_learning_ratio = 5.0
-n_iteration = 4000
-save_every = 500
-model_name = 'cb_model'
-attn_model = 'dot'
-hidden_size = 500
-encoder_n_layers = 2
-decoder_n_layers = 2
-dropout = 0.1
-batch_size = 64
-checkpoint_iter = 4000
-small_batch_size = 5
+
+# Preprocessing settings
+MAX_SENTENCE_LENGTH = 10  # Maximum sentence length to consider
+MIN_WORD_COUNT = 3  # Minimum word count threshold for trimming
+
+
+CLIP = 50.0
+
+# Learning Hyperparameters
+TEACHER_FORCING = 1.0
+LEARNING_RATE = 0.0001
+DECODER_LEARNING_RATIO = 5.0
+ITERATIONS = 4000
+SAVE_EVERY = 500
+ATTENTION_TYPE = 'dot'
+HIDDEN_LAYER_DIM = 500
+ENCODER_LAYERS = 2
+DECODER_LAYERS = 2
+DROPOUT = 0.1
+BATCH_SIZE = 64

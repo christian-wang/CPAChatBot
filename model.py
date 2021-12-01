@@ -1,4 +1,3 @@
-import os
 import random
 from typing import List
 
@@ -8,8 +7,7 @@ from torch.nn import functional as F
 from tqdm import tqdm
 from torchtext.legacy.vocab import Vocab
 from data_prep4 import batch2TrainData, indexesFromSentence, normalizeString
-from hyperparams import MAX_LENGTH, teacher_forcing_ratio, hidden_size, SOS, EOS, PAD, n_iteration, batch_size, clip, \
-    encoder_n_layers, decoder_n_layers
+import hyperparams as hp
 
 
 class EncoderRNN(nn.Module):
@@ -129,7 +127,7 @@ class GreedySearchDecoder(nn.Module):
         self.encoder = encoder
         self.decoder = decoder
         self.device = device
-        self.sos_idx = vocab[SOS]
+        self.sos_idx = vocab[hp.SOS]
 
     def forward(self, input_seq, input_length, max_length):
         # Forward input through encoder model
@@ -177,11 +175,11 @@ class CPAChatBot:
         input_batch = torch.LongTensor(indexes_batch).transpose(0, 1)
         input_batch = input_batch.to(self.device)
         lengths = lengths.to("cpu")
-        tokens, scores = searcher(input_batch, lengths, MAX_LENGTH)
+        tokens, scores = searcher(input_batch, lengths, hp.MAX_SENTENCE_LENGTH)
         answer = []
         for token in tokens:
             word = self.vocab.itos[token.item()]
-            if word not in {EOS, PAD}:
+            if word not in {hp.EOS, hp.PAD}:
                 answer.append(word)
         return answer
 
@@ -226,15 +224,15 @@ class CPAChatBot:
         encoder_outputs, encoder_hidden = self.encoder(input_variable, lengths)
 
         # Create initial decoder input (start with SOS tokens for each sentence)
-        sos_idx = self.vocab[SOS]
-        decoder_input = torch.LongTensor([[sos_idx for _ in range(batch_size)]])
+        sos_idx = self.vocab[hp.SOS]
+        decoder_input = torch.LongTensor([[sos_idx for _ in range(hp.BATCH_SIZE)]])
         decoder_input = decoder_input.to(self.device)
 
         # Set initial decoder hidden state to the encoder's final hidden state
         decoder_hidden = encoder_hidden[:self.decoder.n_layers]
 
         # Determine if we are using teacher forcing this iteration
-        use_teacher_forcing = True if random.random() < teacher_forcing_ratio else False
+        use_teacher_forcing = True if random.random() < hp.TEACHER_FORCING else False
 
         # Forward batch of sequences through decoder one time step at a time
         if use_teacher_forcing:
@@ -256,7 +254,7 @@ class CPAChatBot:
                 )
                 # No teacher forcing: next input is decoder's own current output
                 _, topi = decoder_output.topk(1)
-                decoder_input = torch.LongTensor([[topi[i][0] for i in range(batch_size)]])
+                decoder_input = torch.LongTensor([[topi[i][0] for i in range(hp.BATCH_SIZE)]])
                 decoder_input = decoder_input.to(self.device)
                 # Calculate and accumulate loss
                 mask_loss, nTotal = self.maskNLLLoss(decoder_output, target_variable[t], mask[t])
@@ -268,8 +266,8 @@ class CPAChatBot:
         loss.backward()
 
         # Clip gradients: gradients are modified in place
-        _ = nn.utils.clip_grad_norm_(self.encoder.parameters(), clip)
-        _ = nn.utils.clip_grad_norm_(self.decoder.parameters(), clip)
+        _ = nn.utils.clip_grad_norm_(self.encoder.parameters(), hp.CLIP)
+        _ = nn.utils.clip_grad_norm_(self.decoder.parameters(), hp.CLIP)
 
         # Adjust model weights
         self.encoder_optimizer.step()
@@ -277,36 +275,28 @@ class CPAChatBot:
 
         return sum(print_losses) / n_totals
 
-    def trainIters(self, save_dir, save_every, loadFilename, checkpoint):
+    def trainIters(self, save_path, prev_iteration=0):
         # Load batches for each iteration
         training_batches = [
-            batch2TrainData(self.vocab, [random.choice(self.question_answers) for _ in range(batch_size)])
-            for _ in range(n_iteration)]
+            batch2TrainData(self.vocab, [random.choice(self.question_answers) for _ in range(hp.BATCH_SIZE)])
+            for _ in range(hp.ITERATIONS)]
 
         # Initializations
         print('Initializing ...')
-        start_iteration = 1
-        print_loss = 0
-        if loadFilename:
-            start_iteration = checkpoint['iteration'] + 1
+        start_iteration = prev_iteration + 1
 
         # Training loop
         print("Training...")
-        for iteration in tqdm(range(start_iteration, n_iteration + 1), total=n_iteration + 1 - start_iteration):
+        for iteration in tqdm(range(start_iteration, hp.ITERATIONS + 1), total=hp.ITERATIONS + 1 - start_iteration):
             training_batch = training_batches[iteration - 1]
             # Extract fields from batch
             input_variable, lengths, target_variable, mask, max_target_len = training_batch
 
             # Run a training iteration with batch
             loss = self.train(input_variable, lengths, target_variable, mask, max_target_len)
-            print_loss += loss
 
             # Save checkpoint
-            if (iteration % save_every == 0):
-                directory = os.path.join(save_dir,
-                                         '{}-{}_{}'.format(encoder_n_layers, decoder_n_layers, hidden_size))
-                if not os.path.exists(directory):
-                    os.makedirs(directory)
+            if save_path and iteration % hp.SAVE_EVERY == 0:
                 torch.save({
                     'iteration': iteration,
                     'en': self.encoder.state_dict(),
@@ -316,4 +306,4 @@ class CPAChatBot:
                     'loss': loss,
                     'voc_dict': self.vocab.__dict__,
                     'embedding': self.embedding.state_dict()
-                }, os.path.join(directory, '{}_{}.tar'.format(iteration, 'checkpoint')))
+                }, save_path)

@@ -5,7 +5,7 @@ from collections import Counter
 from typing import List, Dict, Tuple
 import torch
 from torchtext.legacy.vocab import Vocab
-from hyperparams import MAX_LENGTH, PAD, SOS, EOS, UNK, MIN_COUNT
+from hyperparams import MAX_SENTENCE_LENGTH, PAD, SOS, EOS, UNK, MIN_WORD_COUNT
 
 
 def load_exchanges(file_name: str) -> List[List[str]]:
@@ -73,7 +73,7 @@ def get_question_answers(dialogues: Dict[str, List], exchanges: List[List[str]])
         question = dialogues[question_id]
         answer = dialogues[answer_id]
 
-        if len(question) < MAX_LENGTH and len(answer) < MAX_LENGTH:
+        if len(question) < MAX_SENTENCE_LENGTH and len(answer) < MAX_SENTENCE_LENGTH:
             question_answers.append([question, answer])
             for sentence in (question, answer):
                 for word in sentence:
@@ -84,7 +84,7 @@ def get_question_answers(dialogues: Dict[str, List], exchanges: List[List[str]])
     word_counter = Counter(word_counts)
 
     # TODO add vectors
-    vocab = Vocab(word_counter, min_freq=MIN_COUNT, specials=(PAD, SOS, EOS, UNK))
+    vocab = Vocab(word_counter, min_freq=MIN_WORD_COUNT, specials=(PAD, SOS, EOS, UNK))
     return question_answers, vocab
 
 
