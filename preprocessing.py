@@ -82,8 +82,8 @@ def get_question_answers(dialogues: Dict[str, List], exchanges: List[List[str]])
                         word_counts[word] = 1
                     else:
                         word_counts[word] += 1
+    print("Using {}/{} question-answer pairs.", len(question_answers), len(exchanges))
     word_counter = Counter(word_counts)
-
     # TODO add vectors
     vocab = Vocab(word_counter, min_freq=MIN_WORD_COUNT, specials=(PAD, SOS, EOS, UNK))
     return question_answers, vocab
