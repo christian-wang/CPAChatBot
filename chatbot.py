@@ -1,3 +1,5 @@
+import os.path
+
 import torch
 import torch.nn as nn
 import argparse
@@ -64,10 +66,10 @@ def main(in_notebook=False):
     """
     if in_notebook:
         # run in notebook mode, so we don't parse command line arguments
-        load_file = None
+        load_file = 'model.pt' if os.path.isfile('model.pt') else None
         save_file = 'model.pt'
-        lines_file = 'drive/MyDrive/chatbot2/movie_lines.txt'
-        conversations_file = 'drive/MyDrive/chatbot2/movie_conversations.txt'
+        lines_file = 'corpus/movie_lines.txt'
+        conversations_file = 'corpus/movie_conversations.txt'
     else:
         # run in command-line mode
         args = parse_args()

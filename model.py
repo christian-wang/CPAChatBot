@@ -7,7 +7,7 @@ from torch.nn import functional
 from tqdm import tqdm
 from torchtext.legacy.vocab import Vocab
 from attention import Attention
-from preprocessing import get_training_batch, words_to_ints, normalize
+from preprocessing import prepare_training_batch, words_to_ints, normalize
 
 
 class EncoderRNN(nn.Module):
@@ -242,15 +242,14 @@ class CPAChatBot:
         :param save_path: Path to save model.
         :param prev_iteration: Previous iteration number. 0 if new training.
         """
-        training_batches = [
-            get_training_batch([random.choice(self.question_answers) for _ in range(hp.BATCH_SIZE)], self.vocab)
-            for _ in range(hp.ITERATIONS)]
-
         start_iteration = prev_iteration + 1
+        iterations = hp.ITERATIONS + 1 - start_iteration
 
-        for iteration in tqdm(range(start_iteration, hp.ITERATIONS + 1), total=hp.ITERATIONS + 1 - start_iteration):
-            training_batch = training_batches[iteration - 1]
-
+        # ensure batches are sorted by answer length, speeds up training time greatly
+        # self.question_answers.sort(key=lambda x: len(x[1]), reverse=False)
+        for iteration in tqdm(range(start_iteration, hp.ITERATIONS + 1), total=iterations):
+            qa_batch = random.choices(self.question_answers, k=hp.BATCH_SIZE)
+            training_batch = prepare_training_batch(qa_batch, self.vocab)
             loss = self.train_batch(training_batch)
 
             if save_path and iteration % hp.SAVE_EVERY == 0:

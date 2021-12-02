@@ -2,11 +2,12 @@ import itertools
 import torch
 import spacy
 import re
+import random
 from tqdm import tqdm
 from collections import Counter
 from typing import List, Dict, Tuple
 from torchtext.legacy.vocab import Vocab
-from hyperparams import MAX_SENTENCE_LENGTH, PAD, SOS, EOS, UNK, MIN_WORD_COUNT
+import hyperparams as hp
 
 try:
     spacy_en = spacy.load('en_core_web_sm')
@@ -82,7 +83,7 @@ def get_question_answers(dialogues: Dict[str, List], exchanges: List[List[str]])
         question = dialogues[question_id]
         answer = dialogues[answer_id]
 
-        if len(question) < MAX_SENTENCE_LENGTH and len(answer) < MAX_SENTENCE_LENGTH:
+        if len(question) < hp.MAX_SENTENCE_LENGTH and len(answer) < hp.MAX_SENTENCE_LENGTH:
             question_answers.append([question, answer])
             for sentence in (question, answer):
                 for word in sentence:
@@ -94,7 +95,7 @@ def get_question_answers(dialogues: Dict[str, List], exchanges: List[List[str]])
     word_counter = Counter(word_counts)
 
     # TODO add vectors, look at the Vocab class for details
-    vocab = Vocab(word_counter, min_freq=MIN_WORD_COUNT, specials=(PAD, SOS, EOS, UNK))
+    vocab = Vocab(word_counter, min_freq=hp.MIN_WORD_COUNT, specials=(hp.PAD, hp.SOS, hp.EOS, hp.UNK))
     return question_answers, vocab
 
 
@@ -103,7 +104,7 @@ def words_to_ints(vocab: Vocab, sentence: List) -> List[int]:
     Converts a list of words to a list of word indexes
     and appends EOS token index
     """
-    return [vocab[word] for word in sentence] + [vocab[EOS]]
+    return [vocab[word] for word in sentence] + [vocab[hp.EOS]]
 
 
 def pad_sentences(indexed_sentences: List[List[int]], pad_idx: int) -> List[List[int]]:
@@ -148,7 +149,7 @@ def prepare_question_batch(question_batch: List[List[str]], vocab: Vocab):
     """
     indices_batch = [words_to_ints(vocab, question) for question in question_batch]
     lengths = torch.tensor([len(sentence) for sentence in indices_batch])
-    padded_batch = torch.LongTensor(pad_sentences(indices_batch, vocab[PAD]))
+    padded_batch = torch.LongTensor(pad_sentences(indices_batch, vocab[hp.PAD]))
     return padded_batch, lengths
 
 
@@ -163,13 +164,13 @@ def prepare_answer_batch(answer_batch: List[List[str]], vocab: Vocab):
     """
     indices_batch = [words_to_ints(vocab, answer) for answer in answer_batch]
     max_answer_len = max([len(sentence) for sentence in indices_batch])
-    padded_batch = pad_sentences(indices_batch, vocab[PAD])
-    mask = torch.BoolTensor(get_padding_matrix(padded_batch, vocab[PAD]))
+    padded_batch = pad_sentences(indices_batch, vocab[hp.PAD])
+    mask = torch.BoolTensor(get_padding_matrix(padded_batch, vocab[hp.PAD]))
     padded_batch_tensor = torch.LongTensor(padded_batch)
     return padded_batch_tensor, mask, max_answer_len
 
 
-def get_training_batch(question_answer_batch: List[List[List[str]]], vocab: Vocab):
+def prepare_training_batch(question_answer_batch: List[List[List[str]]], vocab: Vocab):
     """
     Returns batch of training data with padding and masking information.
 
