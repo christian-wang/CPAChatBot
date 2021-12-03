@@ -7,7 +7,7 @@ from torch.nn import functional
 from tqdm import tqdm
 from torchtext.legacy.vocab import Vocab
 from attention import Attention
-from preprocessing import prepare_training_batch, words_to_ints, normalize
+from preprocessing import prepare_training_batch, words_to_vectors, normalize
 
 
 class EncoderRNN(nn.Module):
@@ -80,12 +80,12 @@ class GreedySearchDecoder(nn.Module):
     Computes argmax at every step of decoder to generate word.
     """
 
-    def __init__(self, encoder, decoder, device, vocab):
+    def __init__(self, encoder: EncoderRNN, decoder: DecoderRNN, device: torch.device, vocab: Vocab):
         super(GreedySearchDecoder, self).__init__()
         self.encoder = encoder
         self.decoder = decoder
         self.device = device
-        self.sos_idx = vocab[hp.SOS]
+        self.sos_vector = vocab.vectors[vocab[hp.SOS]]
 
     def forward(self, input_seq, input_length, max_length):
         """
@@ -94,7 +94,8 @@ class GreedySearchDecoder(nn.Module):
         encoder_outputs, encoder_hidden = self.encoder(input_seq, input_length)
 
         decoder_hidden = encoder_hidden[:hp.DECODER_LAYERS]
-        decoder_input = torch.ones(1, 1, device=self.device, dtype=torch.long) * self.sos_idx
+        # decoder_input = torch.ones(1, 1, device=self.device, dtype=torch.long) * self.sos_idx
+        decoder_input = self.sos_vector
         all_tokens = torch.zeros([0], device=self.device, dtype=torch.long)
         all_scores = torch.zeros([0], device=self.device)
         for _ in range(max_length):
@@ -132,9 +133,9 @@ class CPAChatBot:
         :param searcher: Decoder used to generate response.
         :return: Response sentence.
         """
-        indexes_batch = [words_to_ints(self.vocab, sentence)]
+        indexes_batch = [words_to_vectors(self.vocab, sentence)]
         lengths = torch.tensor([len(indexes) for indexes in indexes_batch])
-        input_batch = torch.LongTensor(indexes_batch).transpose(0, 1)
+        input_batch = torch.FloatTensor(indexes_batch).transpose(0, 1)
         input_batch = input_batch.to(self.device)
         lengths = lengths.to("cpu")
         tokens, scores = searcher(input_batch, lengths, hp.MAX_SENTENCE_LENGTH)
@@ -200,8 +201,8 @@ class CPAChatBot:
 
         encoder_outputs, encoder_hidden = self.encoder(question_batch, question_lengths)
 
-        sos_idx = self.vocab[hp.SOS]
-        decoder_input = torch.LongTensor([[sos_idx for _ in range(hp.BATCH_SIZE)]])
+        sos_vector = self.vocab.vectors[self.vocab[hp.SOS]]
+        decoder_input = torch.FloatTensor([[sos_vector for _ in range(hp.BATCH_SIZE)]])
         decoder_input = decoder_input.to(self.device)
 
         decoder_hidden = encoder_hidden[:hp.DECODER_LAYERS]
@@ -217,7 +218,7 @@ class CPAChatBot:
                 decoder_input = answer_batch[t].view(1, -1)
             else:
                 _, topi = decoder_output.topk(1)
-                decoder_input = torch.LongTensor([[topi[i][0] for i in range(hp.BATCH_SIZE)]])
+                decoder_input = torch.FloatTensor([[topi[i][0] for i in range(hp.BATCH_SIZE)]])
                 decoder_input = decoder_input.to(self.device)
             mask_loss = self.log_likelihood(decoder_output, answer_batch[t], answer_mask[t])
             mask_sum = answer_mask[t].sum().item()

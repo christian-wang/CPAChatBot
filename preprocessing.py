@@ -95,7 +95,7 @@ def get_question_answers(dialogues: Dict[str, List], exchanges: List[List[str]])
     word_counter = Counter(word_counts)
 
     # TODO add vectors, look at the Vocab class for details
-    vocab = Vocab(word_counter, min_freq=hp.MIN_WORD_COUNT, specials=(hp.PAD, hp.SOS, hp.EOS, hp.UNK))
+    vocab = Vocab(word_counter, vectors="glove.6B.300d", min_freq=hp.MIN_WORD_COUNT, specials=(hp.PAD, hp.SOS, hp.EOS, hp.UNK))
     return question_answers, vocab
 
 
@@ -107,31 +107,39 @@ def words_to_ints(vocab: Vocab, sentence: List) -> List[int]:
     return [vocab[word] for word in sentence] + [vocab[hp.EOS]]
 
 
-def pad_sentences(indexed_sentences: List[List[int]], pad_idx: int) -> List[List[int]]:
+def words_to_vectors(vocab: Vocab, sentence: List) -> List[torch.Tensor]:
+    """
+    Converts a list of words to a list of word vectors
+    and appends EOS vector
+    """
+    return [vocab.vectors[vocab[word]] for word in sentence] + [vocab.vectors[vocab[hp.EOS]]]
+
+
+def pad_sentences(vectorized_sentences: List[List[torch.Tensor]], pad_vector: torch.Tensor) -> List[List[torch.Tensor]]:
     """
     Return padded indexed sentences
 
-    :param indexed_sentences:  List of sentences represented as lists of word indexes
-    :param pad_idx: index of PAD token
+    :param vectorized_sentences:  List of sentences represented as lists of word indexes
+    :param pad_vector: index of PAD token
     """
-    return list(itertools.zip_longest(*indexed_sentences, fillvalue=pad_idx))
+    return list(itertools.zip_longest(*vectorized_sentences, fillvalue=pad_vector))
 
 
-def get_padding_matrix(padded_sentences: List[List[int]], pad_idx) -> List[List[int]]:
+def get_padding_matrix(padded_sentences: List[List[torch.Tensor]], pad_vector: torch.Tensor) -> List[List[int]]:
     """
     Returns a binary matrix (consisting of 1s and 0s) of
     shape (batch_size, max_sentence_length) that indicates
     whether a word is present in a sentence or not.
 
     :param padded_sentences: List of sentences represented as lists of word indexes
-    :param pad_idx: index of PAD token
+    :param pad_vector: padding word vector
     :return: binary matrix of shape (batch_size, max_sentence_length)
     """
     m = []
     for i, seq in enumerate(padded_sentences):
         m.append([])
         for token in seq:
-            if token == pad_idx:
+            if token == pad_vector:
                 m[i].append(0)
             else:
                 m[i].append(1)
@@ -147,9 +155,9 @@ def prepare_question_batch(question_batch: List[List[str]], vocab: Vocab):
     :param vocab: Vocabulary object
     :return: padded tensor of word indices, lengths as 2D tensor
     """
-    indices_batch = [words_to_ints(vocab, question) for question in question_batch]
+    indices_batch = [words_to_vectors(vocab, question) for question in question_batch]
     lengths = torch.tensor([len(sentence) for sentence in indices_batch])
-    padded_batch = torch.LongTensor(pad_sentences(indices_batch, vocab[hp.PAD]))
+    padded_batch = torch.FloatTensor(pad_sentences(indices_batch, vocab.vectors[vocab[hp.PAD]]))
     return padded_batch, lengths
 
 
@@ -162,11 +170,11 @@ def prepare_answer_batch(answer_batch: List[List[str]], vocab: Vocab):
     :param vocab: Vocabulary object
     :return: padded tensor of word indices, padding mask, max sentence length
     """
-    indices_batch = [words_to_ints(vocab, answer) for answer in answer_batch]
+    indices_batch = [words_to_vectors(vocab, answer) for answer in answer_batch]
     max_answer_len = max([len(sentence) for sentence in indices_batch])
-    padded_batch = pad_sentences(indices_batch, vocab[hp.PAD])
-    mask = torch.BoolTensor(get_padding_matrix(padded_batch, vocab[hp.PAD]))
-    padded_batch_tensor = torch.LongTensor(padded_batch)
+    padded_batch = pad_sentences(indices_batch, vocab.vectors[vocab[hp.PAD]])
+    mask = torch.BoolTensor(get_padding_matrix(padded_batch, vocab.vectors[vocab[hp.PAD]]))
+    padded_batch_tensor = torch.FloatTensor(padded_batch)
     return padded_batch_tensor, mask, max_answer_len
 
 
