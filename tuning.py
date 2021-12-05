@@ -1,4 +1,6 @@
 import os.path
+import json
+import random
 
 import torch
 import torch.nn as nn
@@ -59,6 +61,33 @@ def parse_args():
     return args
 
 
+def train_and_evaluate(device, train_qa, test_qa, save_file, vocab):
+    # create word embeddings
+    embeddings = nn.Embedding(len(vocab), hp.HIDDEN_LAYER_DIM)
+    print("Building neural nets...")
+    encoder = EncoderRNN(embeddings)
+    decoder = DecoderRNN(embeddings, len(vocab))
+    encoder = encoder.to(device)
+    decoder = decoder.to(device)
+    encoder.train()
+    decoder.train()
+    print('Building optimizers ...')
+    encoder_optimizer = optim.Adam(encoder.parameters(), lr=hp.ENCODER_LEARNING_RATE)
+    decoder_optimizer = optim.Adam(decoder.parameters(), lr=hp.DECODER_LEARNING_RATE)
+    for optimizer in (encoder_optimizer, decoder_optimizer):
+        for state in optimizer.state.values():
+            for k, v in state.items():
+                if isinstance(v, torch.Tensor):
+                    state[k] = v.cuda()
+    print("Training...")
+    cpa = CPAChatBot(encoder, decoder, encoder_optimizer, decoder_optimizer,
+                     embeddings, vocab, train_qa, device)
+    cpa.train(save_file)
+    encoder.eval()
+    decoder.eval()
+    return cpa.test(test_qa)
+
+
 def main(in_notebook=False):
     """
     Main function
@@ -91,71 +120,38 @@ def main(in_notebook=False):
 
     # build the vocabulary
     print("Building vocabulary...")
-    question_answers, word_counts = get_question_answers(dialogues, exchanges)
-    vocab = build_vocab(word_counts)
+    train_exchanges, test_exchanges = exchanges[:int(len(exchanges) * 0.90)], exchanges[int(len(exchanges) * 0.90):]
 
-    # define variables so IDE doesn't worry
-    embedding_sd = encoder_sd = decoder_sd = encoder_optimizer_sd = \
-        decoder_optimizer_sd = prev_iteration = None
 
-    if load_file:
-        # load the model from file
-        print("Loading model from file...")
-        checkpoint = torch.load(load_file)
-        encoder_sd = checkpoint['en']
-        decoder_sd = checkpoint['de']
-        encoder_optimizer_sd = checkpoint['en_opt']
-        decoder_optimizer_sd = checkpoint['de_opt']
-        embedding_sd = checkpoint['embedding']
-        vocab.__dict__ = checkpoint['voc_dict']
-        prev_iteration = checkpoint['iteration']
+    train_qa, train_word_counts = get_question_answers(dialogues, train_exchanges)
+    test_qa, _ = get_question_answers(dialogues, test_exchanges)
+    # use only 10 instances from test set
+    test_qa = random.sample(test_qa, k=10)
 
-    # create word embeddings
-    embeddings = nn.Embedding(len(vocab), hp.HIDDEN_LAYER_DIM)
+    results = dict()
+    min_word_counts = (1, 2, 4)
+    n_layers = (1, 2, 3)
+    iterations = (2000, 4000, 8000)
+    teacher_forcing = (0.0, 0.25, 0.75, 1.0)
 
-    if load_file:
-        # load embeddings from file
-        embeddings.load_state_dict(embedding_sd)
-
-    print("Building neural nets...")
-    encoder = EncoderRNN(embeddings)
-    decoder = DecoderRNN(embeddings, len(vocab))
-    if load_file:
-        encoder.load_state_dict(encoder_sd)
-        decoder.load_state_dict(decoder_sd)
-    encoder = encoder.to(device)
-    decoder = decoder.to(device)
-
-    encoder.train()
-    decoder.train()
-
-    print('Building optimizers ...')
-    encoder_optimizer = optim.Adam(encoder.parameters(), lr=hp.ENCODER_LEARNING_RATE)
-    decoder_optimizer = optim.Adam(decoder.parameters(), lr=hp.DECODER_LEARNING_RATE)
-
-    if load_file:
-        encoder_optimizer.load_state_dict(encoder_optimizer_sd)
-        decoder_optimizer.load_state_dict(decoder_optimizer_sd)
-
-    for optimizer in (encoder_optimizer, decoder_optimizer):
-        for state in optimizer.state.values():
-            for k, v in state.items():
-                if isinstance(v, torch.Tensor):
-                    state[k] = v.cuda()
-
-    print("Training...")
-    cpa = CPAChatBot(encoder, decoder, encoder_optimizer, decoder_optimizer,
-                     embeddings, vocab, question_answers, device)
-
-    if load_file:
-        cpa.train(save_file, prev_iteration)
-    else:
-        cpa.train(save_file)
-
-    encoder.eval()
-    decoder.eval()
-
-    cpa.run()
+    i = 0
+    for min_word_count in min_word_counts:
+        hp.MIN_WORD_COUNT = min_word_count
+        for layers in n_layers:
+            hp.ENCODER_LAYERS = layers
+            hp.DECODER_LAYERS = layers
+            for iters in iterations:
+                hp.ITERATIONS = iters
+                for teacher_forcing_ratio in teacher_forcing:
+                    i += 1
+                    hp.TEACHER_FORCING = teacher_forcing_ratio
+                    vocab = build_vocab(train_word_counts)
+                    result = train_and_evaluate(device, train_qa, test_qa, save_file, vocab)
+                    results['-'.join(map(str, (min_word_count, layers, iters, teacher_forcing_ratio)))] = result
+                    print("Finished training and evaluating model {} / {}"
+                          .format(i, len(min_word_counts) * len(n_layers) * len(iterations) * len(teacher_forcing)))
+                    with open('tuning_results.json', 'w') as fp:
+                        json.dump(results, fp, indent=2)
 
 
 if __name__ == "__main__":

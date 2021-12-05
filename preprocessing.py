@@ -68,14 +68,14 @@ def load_dialogues(file_name: str) -> Dict[str, List]:
     return dialogues
 
 
-def get_question_answers(dialogues: Dict[str, List], exchanges: List[List[str]]) -> Tuple[List[List[List[str]]], Vocab]:
+def get_question_answers(dialogues: Dict[str, List], exchanges: List[List[str]]) -> Tuple[List[List[List[str]]], Dict]:
     """
     Takes dialogues and exchanges and returns a list of question and answer pairs.
     Any questions or answers that are longer than MAX_SENTENCE_LENGTH are ignored.
 
     :param dialogues: dictionary of lineID: line mapping
     :param exchanges: list of [questionLineID, answerLineID] 2-lists
-    :return: list of question and answer pairs
+    :return: list of question and answer pairs, and word counts
     """
     question_answers = []
     word_counts = dict()
@@ -92,11 +92,20 @@ def get_question_answers(dialogues: Dict[str, List], exchanges: List[List[str]])
                     else:
                         word_counts[word] += 1
     print("Using {}/{} question-answer pairs.".format(len(question_answers), len(exchanges)))
-    word_counter = Counter(word_counts)
 
-    # TODO add vectors, look at the Vocab class for details
+    return question_answers, word_counts
+
+
+def build_vocab(word_counts: Dict[str, int]) -> Vocab:
+    """
+    Creates Vocab object using Dictionary of word counts
+
+    :param word_counts: dictionary of word: count
+    :return: Vocab object
+    """
+    word_counter = Counter(word_counts)
     vocab = Vocab(word_counter, min_freq=hp.MIN_WORD_COUNT, specials=(hp.PAD, hp.SOS, hp.EOS, hp.UNK))
-    return question_answers, vocab
+    return vocab
 
 
 def words_to_ints(vocab: Vocab, sentence: List) -> List[int]:

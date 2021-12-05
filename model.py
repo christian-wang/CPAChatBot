@@ -1,7 +1,7 @@
 import random
 import torch
 import hyperparams as hp
-from typing import List, Tuple
+from typing import List, Tuple, Dict
 from torch import nn as nn, optim
 from torch.nn import functional
 from tqdm import tqdm
@@ -160,6 +160,14 @@ class CPAChatBot:
             question = normalize(user_input)
             answer = self.evaluate(question, searcher)
             print('CPA:', ' '.join(answer))
+
+    def test(self, test_qa: List[List[List[str]]]) -> Dict[str, str]:
+        results = dict()
+        searcher = GreedySearchDecoder(self.encoder, self.decoder, self.device, self.vocab)
+        for question, true_answer in test_qa:
+            answer = self.evaluate(question, searcher)
+            results[' '.join(question)] = ' '.join(answer)
+        return results
 
     def log_likelihood(self, decoder_output: torch.Tensor, ground_truth: torch.Tensor,
                        mask: torch.Tensor) -> torch.Tensor:
